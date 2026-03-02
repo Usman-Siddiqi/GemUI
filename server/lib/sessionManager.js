@@ -2,6 +2,9 @@ import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 
 let ptyModule = null;
+const NODE_MAJOR = Number(process.versions.node.split('.')[0] || 0);
+const FORCE_WINDOWS_PIPE_TERMINAL = process.platform === 'win32' && NODE_MAJOR >= 25;
+const SAFE_MODEL_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 async function getPty() {
     if (ptyModule) return ptyModule;
@@ -13,6 +16,13 @@ async function getPty() {
         throw new Error('node-pty not available — terminal mode disabled');
     }
     return ptyModule;
+}
+
+function sanitizeModelName(model) {
+    if (!model || typeof model !== 'string') return null;
+    const trimmed = model.trim();
+    if (!trimmed || !SAFE_MODEL_PATTERN.test(trimmed)) return null;
+    return trimmed;
 }
 
 /**
@@ -30,33 +40,42 @@ export class SessionManager {
 
     async createTerminalSession(cwd, ws) {
         const id = randomUUID();
-        const pty = await getPty();
         const shell = process.platform === 'win32' ? 'powershell.exe' : (process.env.SHELL || 'bash');
 
-        const proc = pty.spawn(shell, [], {
-            name: 'xterm-256color',
-            cols: 80,
-            rows: 24,
-            cwd,
-            env: { ...process.env, TERM: 'xterm-256color' },
-        });
+        if (FORCE_WINDOWS_PIPE_TERMINAL) {
+            return this._createPipeTerminalSession({ id, cwd, ws, shell });
+        }
 
-        proc.onData((data) => {
-            if (ws.readyState === 1) {
-                ws.send(JSON.stringify({ event: 'terminal:output', data: { sessionId: id, output: data } }));
-            }
-        });
+        try {
+            const pty = await getPty();
+            const proc = pty.spawn(shell, [], {
+                name: 'xterm-256color',
+                cols: 80,
+                rows: 24,
+                cwd,
+                env: { ...process.env, TERM: 'xterm-256color' },
+            });
 
-        proc.onExit(({ exitCode }) => {
-            if (ws.readyState === 1) {
-                ws.send(JSON.stringify({ event: 'terminal:exit', data: { sessionId: id, code: exitCode } }));
-            }
-            this.sessions.delete(id);
-        });
+            proc.onData((data) => {
+                if (ws.readyState === 1) {
+                    ws.send(JSON.stringify({ event: 'terminal:output', data: { sessionId: id, output: data } }));
+                }
+            });
 
-        const session = { id, mode: 'terminal', cwd, proc, ws, startTime: Date.now(), lastActivity: Date.now() };
-        this.sessions.set(id, session);
-        return session;
+            proc.onExit(({ exitCode }) => {
+                if (ws.readyState === 1) {
+                    ws.send(JSON.stringify({ event: 'terminal:exit', data: { sessionId: id, code: exitCode } }));
+                }
+                this.sessions.delete(id);
+            });
+
+            const session = { id, mode: 'terminal', cwd, proc, ws, startTime: Date.now(), lastActivity: Date.now() };
+            this.sessions.set(id, session);
+            return session;
+        } catch (err) {
+            console.warn('[Terminal] Falling back to pipe mode:', err.message);
+            return this._createPipeTerminalSession({ id, cwd, ws, shell });
+        }
     }
 
     // ── Chat Mode: headless gemini per message ──────────────────────
@@ -66,7 +85,7 @@ export class SessionManager {
     createChatSession(cwd, ws, { model, yolo } = {}) {
         const id = randomUUID();
         const session = {
-            id, mode: 'chat', cwd, model, yolo, ws,
+            id, mode: 'chat', cwd, model: sanitizeModelName(model), yolo: !!yolo, ws,
             proc: null,
             startTime: Date.now(),
             lastActivity: Date.now(),
@@ -91,10 +110,12 @@ export class SessionManager {
         if (s.model) args.push('-m', s.model);
         if (s.yolo) args.push('--yolo');
 
-        const proc = spawn('gemini', args, {
+        const command = process.platform === 'win32' ? 'cmd.exe' : 'gemini';
+        const spawnArgs = process.platform === 'win32' ? ['/d', '/s', '/c', 'gemini', ...args] : args;
+        const proc = spawn(command, spawnArgs, {
             cwd: s.cwd,
             env: { ...process.env, NO_COLOR: '1' },
-            shell: true,        // Required on Windows for .cmd files
+            shell: false,
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
         });
@@ -159,9 +180,13 @@ export class SessionManager {
 
     writeToSession(sessionId, text) {
         const s = this.sessions.get(sessionId);
-        if (!s || s.mode !== 'terminal') return;
+        if (!s || (s.mode !== 'terminal' && s.mode !== 'terminal-pipe')) return;
         this._updateActivity(sessionId);
-        s.proc.write(text);
+        if (s.mode === 'terminal') {
+            s.proc.write(text);
+        } else {
+            try { s.proc.stdin.write(text); } catch { /* process already gone */ }
+        }
     }
 
     resizeSession(sessionId, cols, rows) {
@@ -175,7 +200,19 @@ export class SessionManager {
         if (!s) return;
         try {
             if (s.mode === 'terminal') {
-                s.proc.kill();
+                // node-pty can crash on kill under some Windows/Node versions.
+                // Graceful shell exit keeps the server alive.
+                if (process.platform === 'win32') {
+                    try { s.proc.write('\x03'); } catch { /* noop */ }
+                    try { s.proc.write('exit\r'); } catch { /* noop */ }
+                } else {
+                    s.proc.kill();
+                }
+            } else if (s.mode === 'terminal-pipe') {
+                try { s.proc.stdin.write('exit\r\n'); } catch { /* noop */ }
+                setTimeout(() => {
+                    try { s.proc.kill('SIGTERM'); } catch { /* noop */ }
+                }, 300);
             } else if (s.proc) {
                 s.proc.kill('SIGTERM');
             }
@@ -193,5 +230,49 @@ export class SessionManager {
     _updateActivity(sessionId) {
         const s = this.sessions.get(sessionId);
         if (s) s.lastActivity = Date.now();
+    }
+
+    _createPipeTerminalSession({ id, cwd, ws, shell }) {
+        const args = process.platform === 'win32' ? ['-NoLogo'] : ['-i'];
+        const proc = spawn(shell, args, {
+            cwd,
+            env: { ...process.env, TERM: 'xterm-256color' },
+            stdio: ['pipe', 'pipe', 'pipe'],
+            windowsHide: true,
+        });
+
+        const emitOutput = (chunk) => {
+            if (ws.readyState === 1) {
+                ws.send(JSON.stringify({
+                    event: 'terminal:output',
+                    data: { sessionId: id, output: chunk.toString() },
+                }));
+            }
+        };
+
+        proc.stdout.on('data', emitOutput);
+        proc.stderr.on('data', emitOutput);
+
+        proc.on('close', (code) => {
+            if (ws.readyState === 1) {
+                ws.send(JSON.stringify({ event: 'terminal:exit', data: { sessionId: id, code } }));
+            }
+            this.sessions.delete(id);
+        });
+
+        proc.on('error', (err) => {
+            if (ws.readyState === 1) {
+                ws.send(JSON.stringify({
+                    event: 'terminal:output',
+                    data: { sessionId: id, output: `\r\n[terminal error] ${err.message}\r\n` },
+                }));
+                ws.send(JSON.stringify({ event: 'terminal:exit', data: { sessionId: id, code: -1 } }));
+            }
+            this.sessions.delete(id);
+        });
+
+        const session = { id, mode: 'terminal-pipe', cwd, proc, ws, startTime: Date.now(), lastActivity: Date.now() };
+        this.sessions.set(id, session);
+        return session;
     }
 }

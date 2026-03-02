@@ -1,6 +1,18 @@
 import path from 'path';
 import fs from 'fs';
 
+function normalizeForCompare(p) {
+    // Windows paths should be compared case-insensitively.
+    return process.platform === 'win32' ? p.toLowerCase() : p;
+}
+
+function isWithinRoot(root, target) {
+    const rootN = normalizeForCompare(root);
+    const targetN = normalizeForCompare(target);
+    const rel = path.relative(rootN, targetN);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 /**
  * Validates that a requested path lives inside the workspace root.
  * Prevents directory traversal attacks (../) and symlink escapes.
@@ -15,7 +27,13 @@ export function validatePath(requestedPath, workspaceRoot) {
     }
 
     try {
-        const root = path.resolve(workspaceRoot);
+        const rootResolved = path.resolve(workspaceRoot);
+        let root = rootResolved;
+        try {
+            root = fs.realpathSync(rootResolved);
+        } catch {
+            // If root doesn't resolve via realpath, continue with resolved path.
+        }
         let resolved = path.resolve(root, requestedPath);
 
         // Follow symlinks to get the real path
@@ -27,20 +45,20 @@ export function validatePath(requestedPath, workspaceRoot) {
             const parent = path.dirname(resolved);
             try {
                 const realParent = fs.realpathSync(parent);
-                if (!realParent.startsWith(root)) {
+                if (!isWithinRoot(root, realParent)) {
                     return { safe: false, resolved, error: 'Path escapes workspace via parent' };
                 }
             } catch {
                 return { safe: false, resolved, error: 'Parent directory does not exist' };
             }
             // The resolved path (pending creation) is fine if parent is inside root
-            if (!resolved.startsWith(root)) {
+            if (!isWithinRoot(root, resolved)) {
                 return { safe: false, resolved, error: 'Path escapes workspace' };
             }
             return { safe: true, resolved };
         }
 
-        if (!resolved.startsWith(root)) {
+        if (!isWithinRoot(root, resolved)) {
             return { safe: false, resolved, error: 'Path escapes workspace (symlink)' };
         }
 

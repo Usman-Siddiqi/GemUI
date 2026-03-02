@@ -120,7 +120,7 @@ export default function App() {
                                     if (e.key === 'Escape') setEditingWorkspace(false);
                                 }}
                                 onBlur={handleWorkspaceSet}
-                                placeholder="C:\path\to\project"
+                                placeholder="C:\\path\\to\\project"
                                 style={{ fontSize: 'var(--text-xs)', padding: '6px 8px', flex: 1 }}
                             />
                         </div>

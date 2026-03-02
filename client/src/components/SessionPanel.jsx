@@ -23,7 +23,7 @@ export default function SessionPanel() {
         setActiveSession(session.id);
         setLoadingDetail(true);
         try {
-            const data = await api(`/sessions/${session.projectHash}/${session.filename}`);
+            const data = await api(`/sessions/${encodeURIComponent(session.projectHash)}/${encodeURIComponent(session.filename)}`);
             setSessionDetail(data);
         } catch (e) {
             setError(e.message);

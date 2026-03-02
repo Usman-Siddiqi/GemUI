@@ -55,17 +55,20 @@ export default function FileExplorer({ workspace }) {
 
     const closeFile = (path, e) => {
         e?.stopPropagation();
-        setOpenFiles(prev => prev.filter(f => f.path !== path));
-        if (activeFile === path) {
-            setActiveFile(openFiles.find(f => f.path !== path)?.path || null);
-        }
+        setOpenFiles(prev => {
+            const next = prev.filter(f => f.path !== path);
+            if (activeFile === path) {
+                setActiveFile(next.length > 0 ? next[next.length - 1].path : null);
+            }
+            return next;
+        });
     };
 
     const saveFile = async (path) => {
         const file = openFiles.find(f => f.path === path);
         if (!file) return;
         try {
-            await api('/file', { method: 'PUT', body: { path, content: file.content } });
+            await api('/file', { method: 'PUT', params: { workspace }, body: { path, content: file.content } });
             setOpenFiles(prev => prev.map(f => f.path === path ? { ...f, modified: false } : f));
         } catch (e) {
             setError(e.message);
@@ -83,7 +86,7 @@ export default function FileExplorer({ workspace }) {
         if (!name) return;
         const newPath = parentPath === '.' ? name : `${parentPath}/${name}`;
         try {
-            await api('/file/create', { method: 'POST', body: { path: newPath, isDirectory } });
+            await api('/file/create', { method: 'POST', params: { workspace }, body: { path: newPath, isDirectory } });
             loadDir(parentPath);
         } catch (e) {
             setError(e.message);
@@ -110,7 +113,7 @@ export default function FileExplorer({ workspace }) {
         parts[parts.length - 1] = newName;
         const newPath = parts.join('/');
         try {
-            await api('/file/move', { method: 'POST', body: { from: oldPath, to: newPath } });
+            await api('/file/move', { method: 'POST', params: { workspace }, body: { from: oldPath, to: newPath } });
             loadDir('.');
         } catch (e) {
             setError(e.message);

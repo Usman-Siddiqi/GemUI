@@ -6,3 +6,6 @@ build/
 *.log
 .DS_Store
 Thumbs.db
+handoff_context.md
+.playwright-cli/
+output/playwright/

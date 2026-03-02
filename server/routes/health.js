@@ -7,8 +7,15 @@ import fs from 'fs/promises';
 
 const execAsync = promisify(exec);
 export const healthApi = Router();
+const HEALTH_TTL_MS = 15000;
+let cachedHealth = null;
+let cachedAt = 0;
 
 healthApi.get('/health', async (_req, res) => {
+    if (cachedHealth && (Date.now() - cachedAt) < HEALTH_TTL_MS) {
+        return res.json(cachedHealth);
+    }
+
     const info = {
         status: 'ok',
         platform: process.platform,
@@ -17,37 +24,21 @@ healthApi.get('/health', async (_req, res) => {
         memoryFile: null,
     };
 
-    // Check Gemini CLI — try multiple approaches since --version isn't always valid
-    const detectCommands = [
-        process.platform === 'win32' ? 'where.exe gemini 2>NUL' : 'which gemini 2>/dev/null',
-        'gemini -h',
-    ];
-
-    for (const cmd of detectCommands) {
-        try {
-            const { stdout } = await execAsync(cmd, { timeout: 10000, shell: true });
+    // Check Gemini CLI path first.
+    const pathCmd = process.platform === 'win32' ? 'where.exe gemini 2>NUL' : 'which gemini 2>/dev/null';
+    try {
+        const { stdout } = await execAsync(pathCmd, { timeout: 3000, shell: true });
+        const firstLine = stdout.trim().split('\n')[0]?.trim();
+        if (firstLine) {
             info.geminiCli.installed = true;
-            // Try to extract version from help output
-            const versionMatch = stdout.match(/(?:version|v)\s*([\d.]+)/i);
-            if (versionMatch) info.geminiCli.version = versionMatch[1];
-            // If from 'where'/'which', the path tells us it exists
-            if (cmd.includes('where') || cmd.includes('which')) {
-                info.geminiCli.path = stdout.trim().split('\n')[0].trim();
-            }
-            break;
-        } catch {
-            // try next command
+            info.geminiCli.path = firstLine;
         }
+    } catch {
+        // keep installed=false
     }
 
-    // If still no version, try 'gemini -h' output directly
-    if (info.geminiCli.installed && !info.geminiCli.version) {
-        try {
-            const { stdout } = await execAsync('gemini -h', { timeout: 10000, shell: true });
-            const m = stdout.match(/Gemini CLI/i);
-            if (m) info.geminiCli.version = 'detected';
-        } catch { /* ignore */ }
-    }
+    // Keep /health fast and non-blocking. We only require install detection here.
+    if (info.geminiCli.installed) info.geminiCli.version = 'detected';
 
     // Check session directory — Gemini CLI stores sessions in ~/.gemini/tmp/<hash>/chats/
     const geminiDir = path.join(os.homedir(), '.gemini');
@@ -63,5 +54,7 @@ healthApi.get('/health', async (_req, res) => {
         info.memoryFile = path.join(geminiDir, 'GEMINI.md');
     } catch { /* no memory file */ }
 
+    cachedHealth = info;
+    cachedAt = Date.now();
     res.json(info);
 });

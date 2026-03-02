@@ -13,24 +13,33 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
     const textareaRef = useRef(null);
     const currentChunkRef = useRef('');
     const sessionStartedRef = useRef(false);
+    const activeSessionRef = useRef(null);
+    const pendingPromptRef = useRef(null);
 
     // Start a chat session (this just registers the session, no process spawned yet)
     const startSession = useCallback(() => {
         if (sessionStartedRef.current) return;
-        sessionStartedRef.current = true;
-        ws.send('chat:start', { cwd: workspace || '.', model, yolo });
+        const sent = ws.send('chat:start', { cwd: workspace || '.', model, yolo });
+        sessionStartedRef.current = sent;
     }, [ws, workspace, model, yolo]);
 
     useEffect(() => {
         const offs = [];
 
         offs.push(ws.on('chat:started', (data) => {
+            activeSessionRef.current = data.sessionId;
             setSessionId(data.sessionId);
             setError(null);
+
+            if (pendingPromptRef.current) {
+                ws.send('chat:send', { prompt: pendingPromptRef.current });
+                pendingPromptRef.current = null;
+            }
         }));
 
-        // Chunks from `gemini -p` stdout — clean text, no ANSI
+        // Chunks from headless Gemini stdout — clean text, no ANSI
         offs.push(ws.on('chat:chunk', (data) => {
+            if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
             const text = data.text;
             if (!text) return;
 
@@ -48,6 +57,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
 
         // Errors from stderr
         offs.push(ws.on('chat:error', (data) => {
+            if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
             const text = data.text || data.message || 'Unknown error';
             setMessages(prev => [...prev, { role: 'system', content: '⚠️ ' + text.trim(), time: new Date() }]);
         }));
@@ -58,7 +68,8 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
         }));
 
         // Process completed for this message
-        offs.push(ws.on('chat:done', () => {
+        offs.push(ws.on('chat:done', (data) => {
+            if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
             setLoading(false);
             setMessages(prev => {
                 const last = prev[prev.length - 1];
@@ -74,6 +85,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
             setLoading(false);
             sessionStartedRef.current = false;
             setSessionId(null);
+            activeSessionRef.current = null;
         }));
 
         return () => offs.forEach(off => off());
@@ -97,6 +109,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
         if (!sessionId) {
             sessionStartedRef.current = false;
             startSession();
+            pendingPromptRef.current = prompt;
         }
 
         setMessages(prev => [...prev, { role: 'user', content: prompt, time: new Date() }]);
@@ -104,7 +117,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
         setLoading(true);
 
         if (sessionId) {
-            ws.send('chat:send', { sessionId, prompt });
+            ws.send('chat:send', { prompt });
         }
         setInput('');
 
@@ -130,6 +143,8 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
             ws.send('chat:stop', {});
         }
         setSessionId(null);
+        activeSessionRef.current = null;
+        pendingPromptRef.current = null;
         sessionStartedRef.current = false;
         setMessages([]);
         currentChunkRef.current = '';
@@ -162,7 +177,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
                         <Icons.Chat style={{ width: 48, height: 48 }} />
                         <h3>Start a conversation</h3>
                         <p>
-                            Each message runs <code>gemini -p &quot;prompt&quot;</code> in headless mode.
+                            Each message runs <code>gemini -o text</code> in headless mode.
                             For interactive Gemini CLI with full TUI, use the <strong>Terminal</strong> panel.
                         </p>
                         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>

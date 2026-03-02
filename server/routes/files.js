@@ -12,7 +12,7 @@ const upload = multer({ dest: path.join(process.env.TEMP || '/tmp', 'gemui-uploa
 
 // Helper: get workspace root from query or default
 function ws(req) {
-    return req.query.workspace || getDefaultWorkspace();
+    return req.query.workspace || req.body?.workspace || getDefaultWorkspace();
 }
 
 // ── List directory ────────────────────────────────────────────

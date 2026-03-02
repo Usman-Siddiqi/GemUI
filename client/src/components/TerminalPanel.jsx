@@ -8,6 +8,27 @@ export default function TerminalPanel({ ws, workspace }) {
     const [sessionId, setSessionId] = useState(null);
     const cleanupRef = useRef([]);
     const mountedRef = useRef(true);
+    const activeSessionRef = useRef(null);
+    const workspaceRef = useRef(workspace);
+
+    // If workspace changes while terminal panel is open, restart in the new cwd.
+    const handleRestart = useCallback(() => {
+        ws.send('terminal:stop', {});
+        activeSessionRef.current = null;
+        setSessionId(null);
+        if (termRef.current) {
+            termRef.current.clear();
+        }
+        setTimeout(() => {
+            ws.send('terminal:start', { cwd: workspace || '.' });
+        }, 200);
+    }, [ws, workspace]);
+
+    useEffect(() => {
+        if (workspaceRef.current === workspace) return;
+        workspaceRef.current = workspace;
+        if (termRef.current) handleRestart();
+    }, [workspace, handleRestart]);
 
     // Setup terminal UI once
     useEffect(() => {
@@ -73,11 +94,13 @@ export default function TerminalPanel({ ws, workspace }) {
 
             // Handle WS events
             const offOutput = ws.on('terminal:output', (data) => {
+                if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
                 if (termRef.current) terminal.write(data.output);
             });
             cleanupRef.current.push(offOutput);
 
             const offStarted = ws.on('terminal:started', (data) => {
+                activeSessionRef.current = data.sessionId;
                 if (mountedRef.current) setSessionId(data.sessionId);
                 // Resize to fit now that session is active
                 requestAnimationFrame(() => {
@@ -91,9 +114,11 @@ export default function TerminalPanel({ ws, workspace }) {
             });
             cleanupRef.current.push(offStarted);
 
-            const offExit = ws.on('terminal:exit', () => {
+            const offExit = ws.on('terminal:exit', (data) => {
+                if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
                 if (termRef.current) terminal.writeln('\r\n\x1b[33m[Session ended]\x1b[0m');
                 if (mountedRef.current) setSessionId(null);
+                activeSessionRef.current = null;
             });
             cleanupRef.current.push(offExit);
 
@@ -123,6 +148,7 @@ export default function TerminalPanel({ ws, workspace }) {
             mountedRef.current = false;
             cleanupRef.current.forEach(fn => typeof fn === 'function' && fn());
             cleanupRef.current = [];
+            activeSessionRef.current = null;
             if (termRef.current) {
                 termRef.current.dispose();
                 termRef.current = null;
@@ -130,18 +156,6 @@ export default function TerminalPanel({ ws, workspace }) {
             ws.send('terminal:stop', {});
         };
     }, []); // Run once on mount only
-
-    // If workspace changes, restart terminal
-    const handleRestart = useCallback(() => {
-        ws.send('terminal:stop', {});
-        setSessionId(null);
-        if (termRef.current) {
-            termRef.current.clear();
-        }
-        setTimeout(() => {
-            ws.send('terminal:start', { cwd: workspace || '.' });
-        }, 200);
-    }, [ws, workspace]);
 
     return (
         <div className="panel">

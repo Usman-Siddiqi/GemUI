@@ -47,6 +47,7 @@ export default function SearchPanel({ workspace }) {
         try {
             const data = await api('/replace', {
                 method: 'POST',
+                params: { workspace },
                 body: { path: filePath, oldString: query, newString: replaceWith, preview }
             });
             setReplaceResult(data);
