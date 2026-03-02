@@ -1,0 +1,236 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Icons } from '../Icons';
+
+export default function ChatPanel({ ws, workspace, model, yolo }) {
+    const [messages, setMessages] = useState([]);
+    const [input, setInput] = useState('');
+    const [sessionId, setSessionId] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const messagesEnd = useRef(null);
+    const textareaRef = useRef(null);
+    const currentChunkRef = useRef('');
+    const sessionStartedRef = useRef(false);
+
+    // Start a chat session (this just registers the session, no process spawned yet)
+    const startSession = useCallback(() => {
+        if (sessionStartedRef.current) return;
+        sessionStartedRef.current = true;
+        ws.send('chat:start', { cwd: workspace || '.', model, yolo });
+    }, [ws, workspace, model, yolo]);
+
+    useEffect(() => {
+        const offs = [];
+
+        offs.push(ws.on('chat:started', (data) => {
+            setSessionId(data.sessionId);
+            setError(null);
+        }));
+
+        // Chunks from `gemini -p` stdout — clean text, no ANSI
+        offs.push(ws.on('chat:chunk', (data) => {
+            const text = data.text;
+            if (!text) return;
+
+            currentChunkRef.current += text;
+            const fullText = currentChunkRef.current;
+
+            setMessages(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.role === 'assistant' && last?.streaming) {
+                    return [...prev.slice(0, -1), { ...last, content: fullText }];
+                }
+                return [...prev, { role: 'assistant', content: fullText, time: new Date(), streaming: true }];
+            });
+        }));
+
+        // Errors from stderr
+        offs.push(ws.on('chat:error', (data) => {
+            const text = data.text || data.message || 'Unknown error';
+            setMessages(prev => [...prev, { role: 'system', content: '⚠️ ' + text.trim(), time: new Date() }]);
+        }));
+
+        // WS-level error
+        offs.push(ws.on('error', (data) => {
+            setError(data.message);
+        }));
+
+        // Process completed for this message
+        offs.push(ws.on('chat:done', () => {
+            setLoading(false);
+            setMessages(prev => {
+                const last = prev[prev.length - 1];
+                if (last?.streaming) {
+                    return [...prev.slice(0, -1), { ...last, streaming: false }];
+                }
+                return prev;
+            });
+        }));
+
+        // Session destroyed
+        offs.push(ws.on('chat:exit', () => {
+            setLoading(false);
+            sessionStartedRef.current = false;
+            setSessionId(null);
+        }));
+
+        return () => offs.forEach(off => off());
+    }, [ws]);
+
+    useEffect(() => {
+        messagesEnd.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    // Auto-start session when WS connects
+    useEffect(() => {
+        if (ws.connected && !sessionId && !sessionStartedRef.current) {
+            startSession();
+        }
+    }, [ws.connected, sessionId, startSession]);
+
+    const handleSend = () => {
+        const prompt = input.trim();
+        if (!prompt || loading) return;
+
+        if (!sessionId) {
+            sessionStartedRef.current = false;
+            startSession();
+        }
+
+        setMessages(prev => [...prev, { role: 'user', content: prompt, time: new Date() }]);
+        currentChunkRef.current = '';
+        setLoading(true);
+
+        if (sessionId) {
+            ws.send('chat:send', { sessionId, prompt });
+        }
+        setInput('');
+
+        if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSend();
+        }
+    };
+
+    const handleInputChange = (e) => {
+        setInput(e.target.value);
+        const ta = e.target;
+        ta.style.height = 'auto';
+        ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+    };
+
+    const handleNewSession = () => {
+        if (sessionId) {
+            ws.send('chat:stop', {});
+        }
+        setSessionId(null);
+        sessionStartedRef.current = false;
+        setMessages([]);
+        currentChunkRef.current = '';
+        setLoading(false);
+        setError(null);
+        setTimeout(() => startSession(), 300);
+    };
+
+    return (
+        <div className="panel">
+            <div className="panel-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2>
+                    <Icons.Chat style={{ width: 18, height: 18 }} />
+                    Chat
+                </h2>
+                <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+                    {sessionId && (
+                        <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>Ready</span>
+                    )}
+                    {loading && (
+                        <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Thinking...</span>
+                    )}
+                    <button className="btn btn-sm" onClick={handleNewSession} title="New session">+ New</button>
+                </div>
+            </div>
+
+            <div className="chat-messages">
+                {messages.length === 0 && (
+                    <div className="empty-state">
+                        <Icons.Chat style={{ width: 48, height: 48 }} />
+                        <h3>Start a conversation</h3>
+                        <p>
+                            Each message runs <code>gemini -p &quot;prompt&quot;</code> in headless mode.
+                            For interactive Gemini CLI with full TUI, use the <strong>Terminal</strong> panel.
+                        </p>
+                        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
+                            Supports <code>@file</code> references • Model: {model}
+                        </p>
+                        {error && (
+                            <div className="badge badge-error" style={{ marginTop: 'var(--space-3)', padding: '8px 16px' }}>
+                                ⚠️ {error}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {messages.map((msg, i) => (
+                    <div key={i} className={`chat-message ${msg.role}`}>
+                        <div className="chat-avatar">
+                            {msg.role === 'user' ? 'U' : msg.role === 'assistant' ? '✦' : 'ℹ'}
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="chat-bubble">
+                                {msg.role === 'assistant' ? (
+                                    <ReactMarkdown
+                                        remarkPlugins={[remarkGfm]}
+                                        components={{
+                                            code({ children, className, ...rest }) {
+                                                const isInline = !className;
+                                                if (isInline) return <code {...rest}>{children}</code>;
+                                                return (
+                                                    <pre>
+                                                        <code className={className} {...rest}>{children}</code>
+                                                    </pre>
+                                                );
+                                            }
+                                        }}
+                                    >
+                                        {msg.content}
+                                    </ReactMarkdown>
+                                ) : (
+                                    <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
+                                )}
+                                {msg.streaming && <span className="spinner" style={{ display: 'inline-block', width: 12, height: 12, marginLeft: 8, verticalAlign: 'middle' }} />}
+                            </div>
+                            <div className="chat-timestamp">
+                                {msg.time?.toLocaleTimeString()}
+                            </div>
+                        </div>
+                    </div>
+                ))}
+                <div ref={messagesEnd} />
+            </div>
+
+            <div className="chat-input-container">
+                <div className="chat-input-wrapper">
+                    <textarea
+                        ref={textareaRef}
+                        className="chat-input"
+                        placeholder={loading ? 'Gemini is thinking...' : (sessionId ? 'Ask Gemini anything... (Shift+Enter for newline)' : 'Connecting...')}
+                        value={input}
+                        onChange={handleInputChange}
+                        onKeyDown={handleKeyDown}
+                        disabled={loading}
+                        rows={1}
+                    />
+                    <button className="chat-send-btn" onClick={handleSend} disabled={!input.trim() || loading}>
+                        <Icons.Send />
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}

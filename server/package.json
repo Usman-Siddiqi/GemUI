@@ -1,0 +1,16 @@
+{
+    "name": "gemui-server",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "main": "server.js",
+    "dependencies": {
+        "express": "^5.1.0",
+        "ws": "^8.18.0",
+        "node-pty": "^1.0.0",
+        "glob": "^11.0.1",
+        "multer": "^1.4.5-lts.2",
+        "chokidar": "^4.0.3",
+        "strip-ansi": "^7.1.0"
+    }
+}
