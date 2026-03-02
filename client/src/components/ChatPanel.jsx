@@ -104,6 +104,12 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
         }
     }, [ws.connected, sessionId, startSession]);
 
+    // Apply model/workspace/yolo changes immediately to the active chat session.
+    useEffect(() => {
+        if (!ws.connected || !sessionId) return;
+        ws.send('chat:update', { cwd: workspace || '.', model, yolo });
+    }, [ws, ws.connected, sessionId, workspace, model, yolo]);
+
     const handleSend = () => {
         const prompt = input.trim();
         if (!prompt || loading) return;

@@ -305,6 +305,15 @@ export class SessionManager {
         return session;
     }
 
+    updateChatSession(sessionId, { cwd, model, yolo } = {}) {
+        const s = this.sessions.get(sessionId);
+        if (!s || s.mode !== 'chat') return;
+        if (cwd && typeof cwd === 'string') s.cwd = cwd;
+        if (model !== undefined) s.model = sanitizeModelName(model);
+        if (yolo !== undefined) s.yolo = !!yolo;
+        this._updateActivity(sessionId);
+    }
+
     _summarizeChatError(stderrText, code) {
         const text = (stderrText || '').trim();
         if (!text) return code ? `Gemini exited with code ${code}.` : 'Gemini request failed.';

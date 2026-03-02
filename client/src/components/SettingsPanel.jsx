@@ -1,23 +1,41 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Icons } from '../Icons';
 
-const MODELS = [
-    { value: '', label: 'CLI Default (Recommended)', tier: 'Recommended' },
-    { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)', tier: 'Latest' },
-    { value: 'gemini-3.1-flash-preview', label: 'Gemini 3.1 Flash (Preview)', tier: 'Latest' },
-    { value: 'gemini-3.0-pro', label: 'Gemini 3 Pro', tier: 'Current' },
-    { value: 'gemini-3.0-flash', label: 'Gemini 3 Flash', tier: 'Current' },
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', tier: 'Stable' },
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', tier: 'Stable' },
-    { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', tier: 'Stable' },
-    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash', tier: 'Legacy' },
-    { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite', tier: 'Legacy' },
-    { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro', tier: 'Legacy' },
-    { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash', tier: 'Legacy' },
+const FALLBACK_MODELS = [
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', tier: 'Fallback' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', tier: 'Fallback' },
+    { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', tier: 'Fallback' },
 ];
 
-export default function SettingsPanel({ model, setModel, yolo, setYolo, health }) {
-    const tiers = [...new Set(MODELS.map(m => m.tier))];
+export default function SettingsPanel({
+    model,
+    setModel,
+    yolo,
+    setYolo,
+    health,
+    modelCatalog,
+    refreshingModels,
+    onRefreshModels,
+}) {
+    const validated = modelCatalog?.available || [];
+    const unavailable = modelCatalog?.unavailable || [];
+    const uncertain = validated.filter(m => m.verified === false);
+    const selectableModels = validated.length > 0 ? validated : FALLBACK_MODELS;
+    const modelOptions = [
+        { id: '', label: 'CLI Default (Safe Fallback)', tier: 'Recommended' },
+        ...selectableModels.map((m) => ({
+            ...m,
+            label: m.verified === false ? `${m.label} (Unverified)` : m.label,
+        })),
+    ];
+    const tiers = [...new Set(modelOptions.map(m => m.tier))];
+    const checkedAt = modelCatalog?.checkedAt ? new Date(modelCatalog.checkedAt).toLocaleTimeString() : null;
+
+    useEffect(() => {
+        if (!modelCatalog?.checkedAt && !refreshingModels) {
+            onRefreshModels();
+        }
+    }, [modelCatalog?.checkedAt, refreshingModels, onRefreshModels]);
 
     return (
         <div className="panel">
@@ -73,22 +91,52 @@ export default function SettingsPanel({ model, setModel, yolo, setYolo, health }
                     <h3>Model</h3>
                     <div className="setting-row">
                         <div>
+                            <div className="setting-label">Validation</div>
+                            <div className="setting-description">
+                                {modelCatalog?.loading
+                                    ? 'Checking model availability in your Gemini CLI account...'
+                                    : `${validated.length} selectable • ${unavailable.length} unavailable`}
+                                {checkedAt ? ` • Last check: ${checkedAt}` : ''}
+                            </div>
+                        </div>
+                        <button className="btn btn-sm" onClick={onRefreshModels} disabled={refreshingModels}>
+                            {refreshingModels ? 'Checking...' : 'Refresh'}
+                        </button>
+                    </div>
+                    <div className="setting-row">
+                        <div>
                             <div className="setting-label">Active Model</div>
-                            <div className="setting-description">The Gemini model used for new chat sessions. Changes apply to new sessions only.</div>
+                            <div className="setting-description">Applied immediately to upcoming chat requests.</div>
                         </div>
                         <select className="settings-select" value={model} onChange={(e) => setModel(e.target.value)}>
                             {tiers.map(tier => (
                                 <optgroup key={tier} label={tier}>
-                                    {MODELS.filter(m => m.tier === tier).map(m => (
-                                        <option key={m.value} value={m.value}>{m.label}</option>
+                                    {modelOptions.filter(m => m.tier === tier).map(m => (
+                                        <option key={m.id} value={m.id}>{m.label}</option>
                                     ))}
                                 </optgroup>
                             ))}
                         </select>
                     </div>
                     <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--text-tertiary)' }}>
-                        Model availability depends on your Gemini account/project. Use CLI Default for maximum compatibility.
+                        Only validated models are shown in the selector. Use Flash models for speed, Pro models for depth.
                     </div>
+                    {modelCatalog?.error && (
+                        <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--error)' }}>
+                            Model check failed: {modelCatalog.error}
+                        </div>
+                    )}
+                    {unavailable.length > 0 && (
+                        <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--text-secondary)' }}>
+                            Unavailable: {unavailable.slice(0, 4).map(m => m.id).join(', ')}
+                            {unavailable.length > 4 ? ` +${unavailable.length - 4} more` : ''}
+                        </div>
+                    )}
+                    {uncertain.length > 0 && (
+                        <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--warning)' }}>
+                            Unverified this check: {uncertain.map(m => m.id).join(', ')} (kept selectable)
+                        </div>
+                    )}
                 </div>
 
                 {/* Behavior */}

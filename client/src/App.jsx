@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useWebSocket, api } from './hooks';
 import { Icons } from './Icons';
 import ChatPanel from './components/ChatPanel';
@@ -20,19 +20,72 @@ const NAV_ITEMS = [
 ];
 
 export default function App() {
+    const storedModel = typeof window !== 'undefined' ? window.localStorage.getItem('gemui:model') : null;
+    const storedYolo = typeof window !== 'undefined' ? window.localStorage.getItem('gemui:yolo') : null;
     const [activePanel, setActivePanel] = useState('welcome');
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [workspace, setWorkspace] = useState('');
     const [editingWorkspace, setEditingWorkspace] = useState(false);
     const [workspaceInput, setWorkspaceInput] = useState('');
     const [health, setHealth] = useState(null);
-    const [model, setModel] = useState('');
-    const [yolo, setYolo] = useState(false);
+    const [model, setModel] = useState(storedModel ?? 'gemini-2.5-flash');
+    const [yolo, setYolo] = useState(storedYolo === 'true');
+    const [modelCatalog, setModelCatalog] = useState({
+        loading: true,
+        error: null,
+        available: [],
+        unavailable: [],
+        checkedAt: null,
+        recommendedModel: null,
+    });
+    const [refreshingModels, setRefreshingModels] = useState(false);
     const ws = useWebSocket();
 
     useEffect(() => {
         api('/health').then(setHealth).catch(() => { });
     }, []);
+
+    const fetchModels = useCallback(async (refresh = false) => {
+        setRefreshingModels(true);
+        try {
+            const data = await api('/models', { params: refresh ? { refresh: '1' } : undefined });
+            setModelCatalog({
+                loading: false,
+                error: null,
+                available: data.available || [],
+                unavailable: data.unavailable || [],
+                checkedAt: data.checkedAt || null,
+                recommendedModel: data.recommendedModel || null,
+            });
+        } catch (e) {
+            setModelCatalog((prev) => ({
+                ...prev,
+                loading: false,
+                error: e.message,
+            }));
+        } finally {
+            setRefreshingModels(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem('gemui:model', model);
+    }, [model]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem('gemui:yolo', yolo ? 'true' : 'false');
+    }, [yolo]);
+
+    useEffect(() => {
+        if (modelCatalog.loading) return;
+        const availableIds = new Set(modelCatalog.available.map(m => m.id));
+
+        if (model && !availableIds.has(model)) {
+            setModel(modelCatalog.recommendedModel || '');
+        }
+    }, [modelCatalog.loading, modelCatalog.available, modelCatalog.recommendedModel, model]);
 
     const handleNavClick = (id) => {
         setActivePanel(id);
@@ -64,7 +117,18 @@ export default function App() {
             case 'sessions':
                 return <SessionPanel />;
             case 'settings':
-                return <SettingsPanel model={model} setModel={setModel} yolo={yolo} setYolo={setYolo} health={health} />;
+                return (
+                    <SettingsPanel
+                        model={model}
+                        setModel={setModel}
+                        yolo={yolo}
+                        setYolo={setYolo}
+                        health={health}
+                        modelCatalog={modelCatalog}
+                        refreshingModels={refreshingModels}
+                        onRefreshModels={() => fetchModels(true)}
+                    />
+                );
             default:
                 return <WelcomePanel onNavigate={handleNavClick} health={health} />;
         }

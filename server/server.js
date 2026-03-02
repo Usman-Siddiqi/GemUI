@@ -7,6 +7,7 @@ import { fileApi } from './routes/files.js';
 import { searchApi } from './routes/search.js';
 import { sessionsApi } from './routes/sessions.js';
 import { healthApi } from './routes/health.js';
+import { modelsApi } from './routes/models.js';
 import { SessionManager } from './lib/sessionManager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +27,7 @@ app.use(express.static(clientDist));
 // REST APIs
 // ---------------------------------------------------------------------------
 app.use('/api', healthApi);
+app.use('/api', modelsApi);
 app.use('/api', fileApi);
 app.use('/api', searchApi);
 app.use('/api', sessionsApi);
@@ -100,6 +102,16 @@ wss.on('connection', (ws) => {
         case 'chat:send': {
           if (!chatSessionId) return;
           sessionManager.sendChatMessage(chatSessionId, data?.prompt ?? '');
+          break;
+        }
+        case 'chat:update': {
+          if (!chatSessionId) return;
+          sessionManager.updateChatSession(chatSessionId, {
+            cwd: data?.cwd,
+            model: data?.model,
+            yolo: data?.yolo,
+          });
+          ws.send(JSON.stringify({ event: 'chat:updated', data: { sessionId: chatSessionId } }));
           break;
         }
         case 'chat:stop': {
