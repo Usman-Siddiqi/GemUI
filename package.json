@@ -4,7 +4,8 @@
   "private": true,
   "description": "A premium web GUI for Gemini CLI",
   "scripts": {
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev": "npm run dev:stop && concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:stop": "node scripts/kill-ports.js 4008 5173",
     "dev:server": "cd server && node --watch server.js",
     "dev:client": "cd client && npm run dev",
     "build": "cd client && npm run build",
