@@ -55,6 +55,15 @@ function sanitizeMessages(messages) {
     });
 }
 
+function extractLastModel(messages) {
+    if (!Array.isArray(messages)) return null;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const model = messages[i]?.model;
+        if (typeof model === 'string' && model.trim()) return model.trim();
+    }
+    return null;
+}
+
 // ── List saved sessions ───────────────────────────────────────
 // Gemini CLI stores sessions at: ~/.gemini/tmp/<project_hash>/chats/session-<timestamp>-<id>.json
 // Each session JSON has: { sessionId, projectHash, startTime, lastUpdated, messages: [...] }
@@ -85,10 +94,12 @@ sessionsApi.get('/sessions', async (_req, res) => {
 
             // Read .project_root if it exists for a human-readable project name
             let projectName = projDir.name.slice(0, 12) + '...';
+            let projectRoot = null;
             try {
                 const rootContent = await fs.readFile(path.join(tmpDir, projDir.name, '.project_root'), 'utf-8');
                 const trimmed = rootContent.trim();
                 if (trimmed) {
+                    projectRoot = trimmed;
                     // Extract last directory name from path for a clean label
                     projectName = path.basename(trimmed) || trimmed;
                 }
@@ -107,8 +118,10 @@ sessionsApi.get('/sessions', async (_req, res) => {
                     // Extract preview from first user message
                     let preview = '';
                     let messageCount = 0;
+                    let model = null;
                     if (data.messages && Array.isArray(data.messages)) {
                         messageCount = data.messages.length;
+                        model = extractLastModel(data.messages);
                         const firstUser = data.messages.find(m => m.type === 'user' || m.type === 'query');
                         if (firstUser) {
                             preview = extractText(firstUser.content).slice(0, 120);
@@ -121,10 +134,12 @@ sessionsApi.get('/sessions', async (_req, res) => {
                         id: data.sessionId || chatFile.replace('.json', ''),
                         projectHash: projDir.name,
                         projectName,
+                        projectRoot,
                         filename: chatFile,
                         startTime: data.startTime,
                         lastUpdated: data.lastUpdated,
                         messageCount,
+                        model,
                         preview,
                     });
                 } catch {
@@ -158,8 +173,19 @@ sessionsApi.get('/sessions/:projectHash/:filename', async (req, res) => {
     try {
         const raw = await fs.readFile(sessionPath, 'utf-8');
         const data = JSON.parse(raw);
+
+        let projectRoot = null;
+        try {
+            const rootContent = await fs.readFile(path.join(tmpDir, projectHash, '.project_root'), 'utf-8');
+            const trimmed = rootContent.trim();
+            if (trimmed) projectRoot = trimmed;
+        } catch { /* no .project_root */ }
+
         // Sanitize messages to strip binary data before sending to frontend
-        data.messages = sanitizeMessages(data.messages);
+        const originalMessages = Array.isArray(data.messages) ? data.messages : [];
+        data.messages = sanitizeMessages(originalMessages);
+        data.projectRoot = projectRoot;
+        data.model = extractLastModel(originalMessages);
         res.json(data);
     } catch (e) {
         res.status(404).json({ error: 'Session not found' });

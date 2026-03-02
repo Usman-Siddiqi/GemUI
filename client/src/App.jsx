@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWebSocket, api } from './hooks';
 import { Icons } from './Icons';
 import ChatPanel from './components/ChatPanel';
@@ -19,16 +19,35 @@ const NAV_ITEMS = [
     { id: 'settings', label: 'Settings', icon: Icons.Settings, section: 'tools' },
 ];
 
+const FALLBACK_CHAT_MODELS = [
+    { id: 'gemini-2.5-flash', label: '2.5 Flash' },
+    { id: 'gemini-2.5-pro', label: '2.5 Pro' },
+    { id: 'gemini-2.5-flash-lite', label: '2.5 Flash-Lite' },
+    { id: 'gemini-3-flash-preview', label: '3 Flash Preview' },
+    { id: 'gemini-3.1-pro-preview', label: '3.1 Pro Preview' },
+    { id: 'gemini-3-pro-preview', label: '3 Pro Preview (Legacy)' },
+];
+const STARTUP_MODEL_ALLOWLIST = new Set([
+    '',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-3.1-pro-preview',
+    'gemini-3-pro-preview',
+]);
+
 export default function App() {
     const storedModel = typeof window !== 'undefined' ? window.localStorage.getItem('gemui:model') : null;
     const storedYolo = typeof window !== 'undefined' ? window.localStorage.getItem('gemui:yolo') : null;
+    const initialModel = STARTUP_MODEL_ALLOWLIST.has(storedModel || '') ? (storedModel || 'gemini-2.5-flash') : 'gemini-2.5-flash';
     const [activePanel, setActivePanel] = useState('welcome');
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [workspace, setWorkspace] = useState('');
     const [editingWorkspace, setEditingWorkspace] = useState(false);
     const [workspaceInput, setWorkspaceInput] = useState('');
     const [health, setHealth] = useState(null);
-    const [model, setModel] = useState(storedModel ?? 'gemini-2.5-flash');
+    const [model, setModel] = useState(initialModel);
     const [yolo, setYolo] = useState(storedYolo === 'true');
     const [modelCatalog, setModelCatalog] = useState({
         loading: true,
@@ -39,6 +58,8 @@ export default function App() {
         recommendedModel: null,
     });
     const [refreshingModels, setRefreshingModels] = useState(false);
+    const [chatResumeRequest, setChatResumeRequest] = useState(null);
+    const modelPollTimerRef = useRef(null);
     const ws = useWebSocket();
 
     useEffect(() => {
@@ -46,17 +67,27 @@ export default function App() {
     }, []);
 
     const fetchModels = useCallback(async (refresh = false) => {
+        if (modelPollTimerRef.current) {
+            clearTimeout(modelPollTimerRef.current);
+            modelPollTimerRef.current = null;
+        }
         setRefreshingModels(true);
         try {
             const data = await api('/models', { params: refresh ? { refresh: '1' } : undefined });
             setModelCatalog({
-                loading: false,
-                error: null,
+                loading: !!data.refreshing,
+                error: data.error || null,
                 available: data.available || [],
                 unavailable: data.unavailable || [],
                 checkedAt: data.checkedAt || null,
                 recommendedModel: data.recommendedModel || null,
             });
+
+            if (data.refreshing) {
+                modelPollTimerRef.current = setTimeout(() => {
+                    fetchModels(false).catch(() => { /* handled in fetchModels */ });
+                }, 1500);
+            }
         } catch (e) {
             setModelCatalog((prev) => ({
                 ...prev,
@@ -64,7 +95,16 @@ export default function App() {
                 error: e.message,
             }));
         } finally {
-            setRefreshingModels(false);
+            if (!modelPollTimerRef.current) {
+                setRefreshingModels(false);
+            }
+        }
+    }, []);
+
+    useEffect(() => () => {
+        if (modelPollTimerRef.current) {
+            clearTimeout(modelPollTimerRef.current);
+            modelPollTimerRef.current = null;
         }
     }, []);
 
@@ -100,12 +140,41 @@ export default function App() {
         setEditingWorkspace(false);
     };
 
+    const handleResumeSession = useCallback((payload) => {
+        if (!payload?.sourceSessionId) return;
+        if (typeof payload.workspace === 'string' && payload.workspace.trim()) {
+            setWorkspace(payload.workspace.trim());
+        }
+        if (typeof payload.model === 'string' && payload.model.trim()) {
+            setModel(payload.model.trim());
+        }
+        setChatResumeRequest({
+            ...payload,
+            nonce: Date.now() + Math.random(),
+        });
+        setActivePanel('chat');
+        setSidebarOpen(false);
+    }, []);
+
     const modelLabel = model || 'CLI default';
+    const chatModelOptions = (modelCatalog.available?.length > 0
+        ? modelCatalog.available.map(m => ({ id: m.id, label: m.label.replace('Gemini ', '') }))
+        : FALLBACK_CHAT_MODELS);
 
     const renderPanel = () => {
         switch (activePanel) {
             case 'chat':
-                return <ChatPanel ws={ws} workspace={workspace} model={model} yolo={yolo} />;
+                return (
+                    <ChatPanel
+                        ws={ws}
+                        workspace={workspace}
+                        model={model}
+                        setModel={setModel}
+                        yolo={yolo}
+                        modelOptions={chatModelOptions}
+                        resumeRequest={chatResumeRequest}
+                    />
+                );
             case 'terminal':
                 return <TerminalPanel ws={ws} workspace={workspace} />;
             case 'files':
@@ -115,7 +184,7 @@ export default function App() {
             case 'memory':
                 return <MemoryPanel />;
             case 'sessions':
-                return <SessionPanel />;
+                return <SessionPanel onResumeSession={handleResumeSession} />;
             case 'settings':
                 return (
                     <SettingsPanel

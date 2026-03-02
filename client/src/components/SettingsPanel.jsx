@@ -5,6 +5,9 @@ const FALLBACK_MODELS = [
     { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', tier: 'Fallback' },
     { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', tier: 'Fallback' },
     { id: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash-Lite', tier: 'Fallback' },
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview', tier: 'Preview' },
+    { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview', tier: 'Preview' },
+    { id: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview (Legacy)', tier: 'Preview' },
 ];
 
 export default function SettingsPanel({
@@ -119,7 +122,7 @@ export default function SettingsPanel({
                         </select>
                     </div>
                     <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--text-tertiary)' }}>
-                        Only validated models are shown in the selector. Use Flash models for speed, Pro models for depth.
+                        Stable + Preview models are shown. Preview models can be slower, quota-limited, or temporarily unavailable.
                     </div>
                     {modelCatalog?.error && (
                         <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--error)' }}>
@@ -137,6 +140,9 @@ export default function SettingsPanel({
                             Unverified this check: {uncertain.map(m => m.id).join(', ')} (kept selectable)
                         </div>
                     )}
+                    <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--text-tertiary)' }}>
+                        Gemini 3.1 Pro Preview may require paid-tier access and can return temporary capacity errors (429).
+                    </div>
                 </div>
 
                 {/* Behavior */}

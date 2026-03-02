@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 /**
  * WebSocket hook with auto-reconnect and event-based message handling
@@ -68,7 +68,7 @@ export function useWebSocket() {
         };
     }, [connect]);
 
-    return { connected, send, on };
+    return useMemo(() => ({ connected, send, on }), [connected, send, on]);
 }
 
 /**

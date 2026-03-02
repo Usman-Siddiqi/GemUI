@@ -9,3 +9,4 @@ Thumbs.db
 handoff_context.md
 .playwright-cli/
 output/playwright/
+output/

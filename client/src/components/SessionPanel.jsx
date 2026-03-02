@@ -3,7 +3,7 @@ import { api } from '../hooks';
 import { Icons } from '../Icons';
 import ReactMarkdown from 'react-markdown';
 
-export default function SessionPanel() {
+export default function SessionPanel({ onResumeSession }) {
     const [sessions, setSessions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -29,6 +29,31 @@ export default function SessionPanel() {
             setError(e.message);
         }
         setLoadingDetail(false);
+    };
+
+    const handleContinue = (session, detail = null) => {
+        if (typeof onResumeSession !== 'function') return;
+
+        const sourceSessionId = detail?.sessionId || session?.id;
+        if (!sourceSessionId) return;
+
+        onResumeSession({
+            sourceSessionId,
+            workspace: detail?.projectRoot || session?.projectRoot || '',
+            model: detail?.model || session?.model || '',
+            history: Array.isArray(detail?.messages) ? detail.messages : null,
+            title: session?.projectName || 'Session',
+        });
+    };
+
+    const continueFromList = async (session) => {
+        if (!session) return;
+        try {
+            const detail = await api(`/sessions/${encodeURIComponent(session.projectHash)}/${encodeURIComponent(session.filename)}`);
+            handleContinue(session, detail);
+        } catch {
+            handleContinue(session);
+        }
     };
 
     const formatDate = (dateStr) => {
@@ -67,9 +92,20 @@ export default function SessionPanel() {
                     <h2 style={{ cursor: 'pointer' }} onClick={() => { setSessionDetail(null); setActiveSession(null); }}>
                         ← Back to Sessions
                     </h2>
-                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
-                        {sessionDetail.messages?.length || 0} messages
-                    </span>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
+                            {sessionDetail.messages?.length || 0} messages
+                        </span>
+                        <button
+                            className="btn btn-sm"
+                            onClick={() => {
+                                const selected = sessions.find((s) => s.id === activeSession) || null;
+                                handleContinue(selected, sessionDetail);
+                            }}
+                        >
+                            Continue
+                        </button>
+                    </div>
                 </div>
                 <div style={{ padding: 'var(--space-3) var(--space-4)', borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}>
@@ -158,7 +194,19 @@ export default function SessionPanel() {
                                 </div>
                                 <div className="session-preview">{session.preview || 'No preview available'}</div>
                             </div>
-                            <div className="session-date">{formatDate(session.lastUpdated || session.startTime)}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                                <div className="session-date">{formatDate(session.lastUpdated || session.startTime)}</div>
+                                <button
+                                    className="btn btn-sm"
+                                    onClick={async (e) => {
+                                        e.stopPropagation();
+                                        await continueFromList(session);
+                                    }}
+                                    title="Continue this session in Chat"
+                                >
+                                    Continue
+                                </button>
+                            </div>
                         </div>
                     ))
                 )}

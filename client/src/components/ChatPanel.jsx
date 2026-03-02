@@ -3,10 +3,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Icons } from '../Icons';
 
-export default function ChatPanel({ ws, workspace, model, yolo }) {
+export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelOptions = [], resumeRequest = null }) {
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [sessionId, setSessionId] = useState(null);
+    const [runtimeReady, setRuntimeReady] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const messagesEnd = useRef(null);
@@ -15,7 +16,31 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
     const sessionStartedRef = useRef(false);
     const activeSessionRef = useRef(null);
     const pendingPromptRef = useRef(null);
+    const lastSessionConfigRef = useRef(null);
+    const handledResumeNonceRef = useRef(null);
     const modelLabel = model || 'CLI default';
+
+    const mapHistoryMessages = useCallback((history) => {
+        if (!Array.isArray(history)) return [];
+
+        return history
+            .map((msg) => {
+                const type = String(msg?.type || '').toLowerCase();
+                const content = typeof msg?.content === 'string'
+                    ? msg.content
+                    : (msg?.content ? JSON.stringify(msg.content) : '');
+                if (!content.trim()) return null;
+
+                if (type === 'user' || type === 'query') {
+                    return { role: 'user', content, time: msg?.timestamp ? new Date(msg.timestamp) : new Date(), streaming: false };
+                }
+                if (type === 'gemini' || type === 'assistant' || type === 'response' || type === 'model') {
+                    return { role: 'assistant', content, time: msg?.timestamp ? new Date(msg.timestamp) : new Date(), streaming: false };
+                }
+                return { role: 'system', content, time: msg?.timestamp ? new Date(msg.timestamp) : new Date(), streaming: false };
+            })
+            .filter(Boolean);
+    }, []);
 
     // Start a chat session (this just registers the session, no process spawned yet)
     const startSession = useCallback(() => {
@@ -30,6 +55,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
         offs.push(ws.on('chat:started', (data) => {
             activeSessionRef.current = data.sessionId;
             setSessionId(data.sessionId);
+            setRuntimeReady(false);
             setError(null);
 
             if (pendingPromptRef.current) {
@@ -43,6 +69,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
             if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
             const text = data.text;
             if (!text) return;
+            setRuntimeReady(true);
 
             currentChunkRef.current += text;
             const fullText = currentChunkRef.current;
@@ -62,6 +89,12 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
             const raw = data.text ?? data.message ?? 'Unknown error';
             const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
             setMessages(prev => [...prev, { role: 'system', content: '⚠️ ' + text.trim(), time: new Date() }]);
+        }));
+
+        offs.push(ws.on('chat:meta', (data) => {
+            if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
+            if (data?.phase === 'ready') setRuntimeReady(true);
+            if (data?.phase === 'warming') setRuntimeReady(false);
         }));
 
         // WS-level error
@@ -91,7 +124,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
         }));
 
         return () => offs.forEach(off => off());
-    }, [ws]);
+    }, [ws.on, ws.send]);
 
     useEffect(() => {
         messagesEnd.current?.scrollIntoView({ behavior: 'smooth' });
@@ -99,16 +132,51 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
 
     // Auto-start session when WS connects
     useEffect(() => {
+        if (resumeRequest?.sourceSessionId && resumeRequest?.nonce !== handledResumeNonceRef.current) return;
         if (ws.connected && !sessionId && !sessionStartedRef.current) {
             startSession();
         }
-    }, [ws.connected, sessionId, startSession]);
+    }, [ws.connected, sessionId, startSession, resumeRequest]);
+
+    useEffect(() => {
+        if (!ws.connected) return;
+        if (!resumeRequest?.sourceSessionId || !resumeRequest?.nonce) return;
+        if (handledResumeNonceRef.current === resumeRequest.nonce) return;
+
+        handledResumeNonceRef.current = resumeRequest.nonce;
+
+        if (sessionId) {
+            ws.send('chat:stop', {});
+        }
+
+        setSessionId(null);
+        setRuntimeReady(false);
+        activeSessionRef.current = null;
+        pendingPromptRef.current = null;
+        sessionStartedRef.current = false;
+        lastSessionConfigRef.current = null;
+        currentChunkRef.current = '';
+        setLoading(false);
+        setError(null);
+        setMessages(mapHistoryMessages(resumeRequest.history));
+
+        const sent = ws.send('chat:resume', {
+            sourceSessionId: resumeRequest.sourceSessionId,
+            cwd: resumeRequest.workspace || workspace || '.',
+            model: model || undefined,
+            yolo,
+        });
+        sessionStartedRef.current = sent;
+    }, [ws, ws.connected, sessionId, resumeRequest, mapHistoryMessages, workspace, model, yolo]);
 
     // Apply model/workspace/yolo changes immediately to the active chat session.
     useEffect(() => {
         if (!ws.connected || !sessionId) return;
+        const next = `${workspace || '.'}|${model || ''}|${yolo ? '1' : '0'}`;
+        if (lastSessionConfigRef.current === next) return;
+        lastSessionConfigRef.current = next;
         ws.send('chat:update', { cwd: workspace || '.', model, yolo });
-    }, [ws, ws.connected, sessionId, workspace, model, yolo]);
+    }, [ws.connected, ws.send, sessionId, workspace, model, yolo]);
 
     const handleSend = () => {
         const prompt = input.trim();
@@ -151,9 +219,11 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
             ws.send('chat:stop', {});
         }
         setSessionId(null);
+        setRuntimeReady(false);
         activeSessionRef.current = null;
         pendingPromptRef.current = null;
         sessionStartedRef.current = false;
+        lastSessionConfigRef.current = null;
         setMessages([]);
         currentChunkRef.current = '';
         setLoading(false);
@@ -169,8 +239,23 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
                     Chat
                 </h2>
                 <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-                    {sessionId && (
+                    <select
+                        className="settings-select"
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                        style={{ minWidth: 150, fontSize: 'var(--text-xs)', padding: '4px 8px' }}
+                        title="Switch model (applies immediately)"
+                    >
+                        <option value="">CLI default</option>
+                        {modelOptions.map((m) => (
+                            <option key={m.id} value={m.id}>{m.label}</option>
+                        ))}
+                    </select>
+                    {sessionId && runtimeReady && (
                         <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>Ready</span>
+                    )}
+                    {sessionId && !runtimeReady && (
+                        <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Warming...</span>
                     )}
                     {loading && (
                         <span className="badge badge-info" style={{ fontSize: '0.65rem' }}>Thinking...</span>
@@ -185,8 +270,8 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
                         <Icons.Chat style={{ width: 48, height: 48 }} />
                         <h3>Start a conversation</h3>
                         <p>
-                            Each message runs <code>gemini -o text</code> in headless mode.
-                            For interactive Gemini CLI with full TUI, use the <strong>Terminal</strong> panel.
+                            Chat runs on a persistent Gemini CLI ACP session for low latency.
+                            For full interactive TUI, use the <strong>Terminal</strong> panel.
                         </p>
                         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
                             Supports <code>@file</code> references • Model: {modelLabel}
@@ -242,7 +327,11 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
                     <textarea
                         ref={textareaRef}
                         className="chat-input"
-                        placeholder={loading ? 'Gemini is thinking...' : (sessionId ? 'Ask Gemini anything... (Shift+Enter for newline)' : 'Connecting...')}
+                        placeholder={loading
+                            ? 'Gemini is thinking...'
+                            : (sessionId
+                                ? (runtimeReady ? 'Ask Gemini anything... (Shift+Enter for newline)' : 'Warming Gemini session...')
+                                : 'Connecting...')}
                         value={input}
                         onChange={handleInputChange}
                         onKeyDown={handleKeyDown}

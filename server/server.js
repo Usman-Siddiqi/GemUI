@@ -86,7 +86,7 @@ wss.on('connection', (ws) => {
           break;
         }
 
-        // ── Chat mode: headless `gemini -p` per message ────────────────
+        // ── Chat mode: persistent Gemini ACP session ───────────────────
         case 'chat:start': {
           if (chatSessionId) {
             sessionManager.destroySession(chatSessionId);
@@ -97,6 +97,34 @@ wss.on('connection', (ws) => {
           const s = sessionManager.createChatSession(cwd, ws, { model, yolo });
           chatSessionId = s.id;
           ws.send(JSON.stringify({ event: 'chat:started', data: { sessionId: s.id } }));
+          const runtimeState = sessionManager.getChatRuntimeState(s.id);
+          if (runtimeState === 'ready') {
+            ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'ready' } }));
+          } else if (runtimeState === 'warming') {
+            ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'warming' } }));
+          }
+          break;
+        }
+        case 'chat:resume': {
+          if (chatSessionId) {
+            sessionManager.destroySession(chatSessionId);
+          }
+          const cwd = data?.cwd || process.env.USERPROFILE || process.env.HOME || '.';
+          const model = data?.model;
+          const yolo = data?.yolo ?? false;
+          const sourceSessionId = data?.sourceSessionId || data?.sessionId;
+          const s = sessionManager.resumeChatSession(cwd, ws, { sessionId: sourceSessionId, model, yolo });
+          chatSessionId = s.id;
+          ws.send(JSON.stringify({
+            event: 'chat:started',
+            data: { sessionId: s.id, resumedFrom: sourceSessionId || null },
+          }));
+          const runtimeState = sessionManager.getChatRuntimeState(s.id);
+          if (runtimeState === 'ready') {
+            ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'ready' } }));
+          } else if (runtimeState === 'warming') {
+            ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'warming' } }));
+          }
           break;
         }
         case 'chat:send': {
