@@ -5,6 +5,7 @@ import ChatPanel from './components/ChatPanel';
 import TerminalPanel from './components/TerminalPanel';
 import FileExplorer from './components/FileExplorer';
 import SearchPanel from './components/SearchPanel';
+import GitPanel from './components/GitPanel';
 import MemoryPanel from './components/MemoryPanel';
 import SessionPanel from './components/SessionPanel';
 import SettingsPanel from './components/SettingsPanel';
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
     { id: 'terminal', label: 'Terminal', icon: Icons.Terminal, section: 'main' },
     { id: 'files', label: 'Files', icon: Icons.Folder, section: 'main' },
     { id: 'search', label: 'Search', icon: Icons.Search, section: 'main' },
+    { id: 'git', label: 'Git', icon: Icons.GitBranch, section: 'main' },
     { id: 'memory', label: 'Memory', icon: Icons.Memory, section: 'tools' },
     { id: 'sessions', label: 'Sessions', icon: Icons.Sessions, section: 'tools' },
     { id: 'settings', label: 'Settings', icon: Icons.Settings, section: 'tools' },
@@ -40,6 +42,7 @@ const STARTUP_MODEL_ALLOWLIST = new Set([
 export default function App() {
     const storedModel = typeof window !== 'undefined' ? window.localStorage.getItem('gemui:model') : null;
     const storedYolo = typeof window !== 'undefined' ? window.localStorage.getItem('gemui:yolo') : null;
+    const storedNotifySound = typeof window !== 'undefined' ? window.localStorage.getItem('gemui:notifySound') : null;
     const initialModel = STARTUP_MODEL_ALLOWLIST.has(storedModel || '') ? (storedModel || 'gemini-2.5-flash') : 'gemini-2.5-flash';
     const [activePanel, setActivePanel] = useState('welcome');
     const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -49,6 +52,7 @@ export default function App() {
     const [health, setHealth] = useState(null);
     const [model, setModel] = useState(initialModel);
     const [yolo, setYolo] = useState(storedYolo === 'true');
+    const [notificationSound, setNotificationSound] = useState(storedNotifySound !== 'false');
     const [modelCatalog, setModelCatalog] = useState({
         loading: true,
         error: null,
@@ -119,6 +123,11 @@ export default function App() {
     }, [yolo]);
 
     useEffect(() => {
+        if (typeof window === 'undefined') return;
+        window.localStorage.setItem('gemui:notifySound', notificationSound ? 'true' : 'false');
+    }, [notificationSound]);
+
+    useEffect(() => {
         if (modelCatalog.loading) return;
         const availableIds = new Set(modelCatalog.available.map(m => m.id));
 
@@ -173,6 +182,7 @@ export default function App() {
                         yolo={yolo}
                         modelOptions={chatModelOptions}
                         resumeRequest={chatResumeRequest}
+                        notificationSound={notificationSound}
                     />
                 );
             case 'terminal':
@@ -181,6 +191,8 @@ export default function App() {
                 return <FileExplorer workspace={workspace} />;
             case 'search':
                 return <SearchPanel workspace={workspace} />;
+            case 'git':
+                return <GitPanel workspace={workspace} />;
             case 'memory':
                 return <MemoryPanel />;
             case 'sessions':
@@ -192,6 +204,8 @@ export default function App() {
                         setModel={setModel}
                         yolo={yolo}
                         setYolo={setYolo}
+                        notificationSound={notificationSound}
+                        setNotificationSound={setNotificationSound}
                         health={health}
                         modelCatalog={modelCatalog}
                         refreshingModels={refreshingModels}
@@ -343,6 +357,10 @@ function WelcomePanel({ onNavigate, health }) {
                 <div className="welcome-card" onClick={() => onNavigate('search')}>
                     <Icons.Search />
                     <span>Search</span>
+                </div>
+                <div className="welcome-card" onClick={() => onNavigate('git')}>
+                    <Icons.GitBranch />
+                    <span>Git</span>
                 </div>
                 <div className="welcome-card" onClick={() => onNavigate('memory')}>
                     <Icons.Memory />

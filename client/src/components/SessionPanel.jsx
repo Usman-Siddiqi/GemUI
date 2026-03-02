@@ -10,6 +10,7 @@ export default function SessionPanel({ onResumeSession }) {
     const [activeSession, setActiveSession] = useState(null);
     const [sessionDetail, setSessionDetail] = useState(null);
     const [loadingDetail, setLoadingDetail] = useState(false);
+    const [deletingKey, setDeletingKey] = useState(null);
 
     useEffect(() => {
         setLoading(true);
@@ -53,6 +54,30 @@ export default function SessionPanel({ onResumeSession }) {
             handleContinue(session, detail);
         } catch {
             handleContinue(session);
+        }
+    };
+
+    const deleteSession = async (session) => {
+        if (!session) return;
+        if (!window.confirm(`Delete session "${session.preview || session.id}"? This cannot be undone.`)) return;
+
+        const key = `${session.projectHash}/${session.filename}`;
+        setDeletingKey(key);
+        try {
+            await api(`/sessions/${encodeURIComponent(session.projectHash)}/${encodeURIComponent(session.filename)}`, {
+                method: 'DELETE',
+            });
+
+            setSessions((prev) => prev.filter((s) => !(s.projectHash === session.projectHash && s.filename === session.filename)));
+
+            if (sessionDetail?.sessionId === session.id || activeSession === session.id) {
+                setSessionDetail(null);
+                setActiveSession(null);
+            }
+        } catch (e) {
+            setError(e.message);
+        } finally {
+            setDeletingKey(null);
         }
     };
 
@@ -104,6 +129,16 @@ export default function SessionPanel({ onResumeSession }) {
                             }}
                         >
                             Continue
+                        </button>
+                        <button
+                            className="btn btn-sm btn-danger"
+                            onClick={() => {
+                                const selected = sessions.find((s) => s.id === activeSession) || null;
+                                deleteSession(selected);
+                            }}
+                            disabled={!sessions.find((s) => s.id === activeSession)}
+                        >
+                            Delete
                         </button>
                     </div>
                 </div>
@@ -205,6 +240,17 @@ export default function SessionPanel({ onResumeSession }) {
                                     title="Continue this session in Chat"
                                 >
                                     Continue
+                                </button>
+                                <button
+                                    className="btn btn-sm btn-danger"
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        deleteSession(session);
+                                    }}
+                                    disabled={deletingKey === `${session.projectHash}/${session.filename}`}
+                                    title="Delete this session"
+                                >
+                                    {deletingKey === `${session.projectHash}/${session.filename}` ? '...' : 'Delete'}
                                 </button>
                             </div>
                         </div>

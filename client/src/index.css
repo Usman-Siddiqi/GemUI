@@ -444,6 +444,29 @@ body {
   margin-top: var(--space-1);
 }
 
+.chat-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.chat-message-attachment {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.18);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+}
+
+.chat-attachment-only-note {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
 /* Tool calls in chat */
 .tool-call {
   display: flex;
@@ -473,6 +496,122 @@ body {
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
   background: var(--bg-secondary);
+}
+
+.chat-input-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.chat-attach-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.chat-attach-btn:hover {
+  color: var(--accent);
+  border-color: var(--border-focus);
+  background: var(--surface-2);
+}
+
+.chat-attach-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chat-attach-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-attach-hint {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.chat-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+
+.chat-attachment-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.chat-attachment-remove:hover {
+  color: var(--error);
+}
+
+.chat-context-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.24);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--text-secondary);
+  max-width: min(460px, 55vw);
+}
+
+.chat-context-percent {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--success);
+  min-width: 44px;
+  text-align: right;
+}
+
+.chat-context-track {
+  width: 84px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.22);
+  overflow: hidden;
+}
+
+.chat-context-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e, #eab308, #ef4444);
+}
+
+.chat-context-tokens,
+.chat-context-remaining {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .chat-input-wrapper {
@@ -737,6 +876,99 @@ body {
   color: var(--warning);
   border-radius: 2px;
   padding: 0 2px;
+}
+
+/* ── Git Panel ─────────────────────────────────────────────── */
+
+.git-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.git-toolbar-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.git-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 42vh;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+
+.git-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.git-item-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.git-path {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.git-meta {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  margin-top: var(--space-1);
+}
+
+.git-actions {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  align-self: center;
+}
+
+.git-commit-box {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.git-commit-input {
+  width: 100%;
+  min-height: 76px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+  outline: none;
+}
+
+.git-commit-input:focus {
+  border-color: var(--border-focus);
 }
 
 /* ── Settings ──────────────────────────────────────────────── */
@@ -1060,6 +1292,17 @@ body {
 
   .chat-bubble {
     max-width: 95%;
+  }
+
+  .chat-context-pill {
+    width: 100%;
+    max-width: none;
+    justify-content: space-between;
+  }
+
+  .chat-context-track {
+    flex: 1;
+    min-width: 64px;
   }
 }
 

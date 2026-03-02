@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import fs from 'fs';
+import fsp from 'fs/promises';
+import os from 'os';
 import path from 'path';
 import { Readable, Writable } from 'stream';
 import * as acp from '@agentclientprotocol/sdk';
@@ -10,12 +12,19 @@ const NODE_MAJOR = Number(process.versions.node.split('.')[0] || 0);
 const FORCE_WINDOWS_PIPE_TERMINAL = process.platform === 'win32' && NODE_MAJOR >= 25;
 const SAFE_MODEL_PATTERN = /^[a-zA-Z0-9._-]+$/;
 const SAFE_SESSION_ID_PATTERN = /^[a-zA-Z0-9._:-]+$/;
+const SAFE_ATTACHMENT_NAME_PATTERN = /^[^\\/:*?"<>|]+$/;
 const ACP_PROTOCOL_VERSION = acp.PROTOCOL_VERSION;
 const GEMINI_CLI_JS = process.platform === 'win32'
     ? path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@google', 'gemini-cli', 'dist', 'index.js')
     : '';
 const HAS_DIRECT_GEMINI_CLI_JS = process.platform === 'win32' && GEMINI_CLI_JS && fs.existsSync(GEMINI_CLI_JS);
 const DEFAULT_WARM_MODEL = 'gemini-2.5-flash';
+const TMP_UPLOAD_DIR = path.resolve(path.join(process.env.TEMP || os.tmpdir() || '/tmp', 'gemui-uploads'));
+const MAX_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_INLINE_TEXT_ATTACHMENT_BYTES = 256 * 1024;
+const MAX_INLINE_TEXT_CHARS = 12000;
+const MAX_INLINE_ATTACHMENTS = 3;
 const NOOP_WS = { readyState: 0, send: () => { } };
 
 async function getPty() {
@@ -42,6 +51,89 @@ function sanitizeSessionId(sessionId) {
     const trimmed = sessionId.trim();
     if (!trimmed || !SAFE_SESSION_ID_PATTERN.test(trimmed)) return null;
     return trimmed;
+}
+
+function isPathWithin(base, target) {
+    const rel = path.relative(base, target);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function normalizeAttachmentName(name, fallbackPath) {
+    const candidate = typeof name === 'string' ? name.trim() : '';
+    if (candidate && SAFE_ATTACHMENT_NAME_PATTERN.test(candidate)) return candidate;
+    return path.basename(fallbackPath || 'attachment');
+}
+
+function toSafeRelativePath(root, absPath) {
+    if (!root || !absPath) return absPath;
+    try {
+        const rel = path.relative(root, absPath);
+        return rel && !rel.startsWith('..') && !path.isAbsolute(rel)
+            ? rel.replace(/\\/g, '/')
+            : absPath;
+    } catch {
+        return absPath;
+    }
+}
+
+function formatContextUsage(usedRaw, sizeRaw, source = 'acp') {
+    const used = Number(usedRaw);
+    const size = Number(sizeRaw);
+    if (!Number.isFinite(used) || !Number.isFinite(size) || size <= 0) return null;
+    const clampedUsed = Math.max(0, Math.min(used, size));
+    const remaining = Math.max(0, size - clampedUsed);
+    const percent = Math.max(0, Math.min((clampedUsed / size) * 100, 100));
+    return {
+        used: Math.round(clampedUsed),
+        size: Math.round(size),
+        remaining: Math.round(remaining),
+        percent,
+        source,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+function firstFiniteNumber(...values) {
+    for (const value of values) {
+        const num = Number(value);
+        if (Number.isFinite(num)) return num;
+    }
+    return null;
+}
+
+function extractContextUsageFromStats(stats, source = 'stream-json') {
+    if (!stats || typeof stats !== 'object') return null;
+
+    const nestedContext = stats.context && typeof stats.context === 'object' ? stats.context : null;
+    const used = firstFiniteNumber(
+        stats.used,
+        stats.contextUsed,
+        stats.context_used,
+        stats.contextWindowUsed,
+        stats.context_window_used,
+        stats.tokensInContext,
+        stats.tokens_in_context,
+        nestedContext?.used,
+        nestedContext?.contextUsed,
+        nestedContext?.context_used,
+        nestedContext?.contextWindowUsed,
+        nestedContext?.context_window_used,
+    );
+    const size = firstFiniteNumber(
+        stats.size,
+        stats.contextSize,
+        stats.context_size,
+        stats.contextWindowSize,
+        stats.context_window_size,
+        stats.maxContextTokens,
+        stats.max_context_tokens,
+        nestedContext?.size,
+        nestedContext?.contextSize,
+        nestedContext?.context_size,
+        nestedContext?.contextWindowSize,
+        nestedContext?.context_window_size,
+    );
+    return formatContextUsage(used, size, source);
 }
 
 function pickPermissionOption(options, { yolo, toolTitle }) {
@@ -141,6 +233,7 @@ export class SessionManager {
             cwd,
             model: sanitizeModelName(model),
             resumeSessionId: sanitizeSessionId(resumeSessionId),
+            contextUsage: null,
             yolo: !!yolo,
             ws,
             proc: null,
@@ -264,7 +357,7 @@ export class SessionManager {
         return session;
     }
 
-    sendChatMessage(sessionId, prompt) {
+    sendChatMessage(sessionId, prompt, { attachments } = {}) {
         const s = this.sessions.get(sessionId);
         if (!s || s.mode !== 'chat') return;
         this._updateActivity(sessionId);
@@ -274,17 +367,162 @@ export class SessionManager {
             try { s.proc.kill('SIGTERM'); } catch { /* ok */ }
         }
 
-        // Prompts run async to keep WS event loop responsive.
-        this._runChatAcpPrompt(sessionId, s, prompt, { allowModelFallback: true }).catch((err) => {
-            if (this.sessions.get(sessionId) !== s) return;
-            if (s.ws.readyState === 1) {
-                s.ws.send(JSON.stringify({
-                    event: 'chat:error',
-                    data: { sessionId, text: `Chat request failed: ${getErrorText(err) || 'Unknown error'}` },
-                }));
-                s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code: -1 } }));
+        this._normalizeAttachments(attachments, s.cwd)
+            .then((normalizedAttachments) => {
+                // Prompts run async to keep WS event loop responsive.
+                this._runChatAcpPrompt(sessionId, s, prompt, {
+                    allowModelFallback: true,
+                    attachments: normalizedAttachments,
+                }).catch((err) => {
+                    if (this.sessions.get(sessionId) !== s) return;
+                    if (s.ws.readyState === 1) {
+                        s.ws.send(JSON.stringify({
+                            event: 'chat:error',
+                            data: { sessionId, text: `Chat request failed: ${getErrorText(err) || 'Unknown error'}` },
+                        }));
+                        s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code: -1 } }));
+                    }
+                }).finally(() => {
+                    this._cleanupUploadedAttachments(normalizedAttachments).catch(() => { /* noop */ });
+                });
+            })
+            .catch((err) => {
+                if (this.sessions.get(sessionId) !== s) return;
+                if (s.ws.readyState === 1) {
+                    s.ws.send(JSON.stringify({
+                        event: 'chat:error',
+                        data: { sessionId, text: `Attachment error: ${getErrorText(err) || 'Failed to process attachments'}` },
+                    }));
+                    s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code: -1 } }));
+                }
+            });
+    }
+
+    async _normalizeAttachments(rawAttachments, cwd) {
+        if (!Array.isArray(rawAttachments) || rawAttachments.length === 0) return [];
+
+        const workspaceRoot = path.resolve(cwd || '.');
+        const normalized = [];
+
+        for (const item of rawAttachments.slice(0, MAX_ATTACHMENTS)) {
+            const candidatePath = typeof item?.path === 'string' ? item.path.trim() : '';
+            if (!candidatePath) continue;
+
+            const resolvedPath = path.resolve(candidatePath);
+            const inUploads = isPathWithin(TMP_UPLOAD_DIR, resolvedPath);
+            const inWorkspace = isPathWithin(workspaceRoot, resolvedPath);
+            if (!inUploads && !inWorkspace) continue;
+
+            let stat;
+            try {
+                stat = await fsp.stat(resolvedPath);
+            } catch {
+                continue;
             }
-        });
+            if (!stat.isFile()) continue;
+            if (stat.size > MAX_ATTACHMENT_BYTES) continue;
+
+            const mimeType = typeof item?.mimetype === 'string' && item.mimetype.trim()
+                ? item.mimetype.trim().toLowerCase()
+                : (typeof item?.mimeType === 'string' && item.mimeType.trim()
+                    ? item.mimeType.trim().toLowerCase()
+                    : 'application/octet-stream');
+
+            const attachment = {
+                name: normalizeAttachmentName(item?.filename || item?.name, resolvedPath),
+                path: resolvedPath,
+                displayPath: toSafeRelativePath(workspaceRoot, resolvedPath),
+                mimeType,
+                size: Number.isFinite(Number(item?.size)) ? Number(item.size) : stat.size,
+                uploaded: inUploads,
+            };
+
+            normalized.push(attachment);
+        }
+
+        return normalized;
+    }
+
+    async _buildPromptBundle(prompt, attachments, cwd) {
+        const promptText = String(prompt || '').trim();
+        const safeAttachments = Array.isArray(attachments) ? attachments : [];
+        const textSections = [];
+        const imageParts = [];
+        const referenceLines = [];
+        let inlineTextCount = 0;
+
+        for (const attachment of safeAttachments) {
+            referenceLines.push(`- ${attachment.name} (${attachment.displayPath})`);
+
+            if (attachment.mimeType.startsWith('image/')) {
+                try {
+                    const buf = await fsp.readFile(attachment.path);
+                    imageParts.push({
+                        type: 'image',
+                        mimeType: attachment.mimeType,
+                        data: buf.toString('base64'),
+                        uri: `file://${attachment.path.replace(/\\/g, '/')}`,
+                    });
+                } catch {
+                    textSections.push(`Attachment "${attachment.name}" could not be read as an image.`);
+                }
+                continue;
+            }
+
+            if (inlineTextCount >= MAX_INLINE_ATTACHMENTS) continue;
+            if (attachment.size > MAX_INLINE_TEXT_ATTACHMENT_BYTES) continue;
+            if (!/^text\/|application\/(json|xml|javascript|x-javascript|x-sh|x-shellscript)/.test(attachment.mimeType)) {
+                continue;
+            }
+
+            try {
+                const raw = await fsp.readFile(attachment.path, 'utf8');
+                const clipped = raw.length > MAX_INLINE_TEXT_CHARS
+                    ? `${raw.slice(0, MAX_INLINE_TEXT_CHARS)}\n\n[...truncated...]`
+                    : raw;
+                const ext = path.extname(attachment.name).replace('.', '');
+                textSections.push(`Attached file: ${attachment.name}\n\`\`\`${ext || 'text'}\n${clipped}\n\`\`\``);
+                inlineTextCount += 1;
+            } catch {
+                textSections.push(`Attachment "${attachment.name}" could not be read as text.`);
+            }
+        }
+
+        let combinedText = promptText;
+        if (referenceLines.length > 0) {
+            combinedText += `${combinedText ? '\n\n' : ''}Attached files:\n${referenceLines.join('\n')}`;
+        }
+        if (textSections.length > 0) {
+            combinedText += `${combinedText ? '\n\n' : ''}${textSections.join('\n\n')}`;
+        }
+        if (!combinedText) combinedText = 'Please analyze the attached files.';
+
+        const acpPrompt = [{ type: 'text', text: combinedText }, ...imageParts];
+        const cliPrompt = imageParts.length > 0
+            ? `${combinedText}\n\nImage references:\n${safeAttachments.filter((a) => a.mimeType.startsWith('image/')).map((a) => `@${a.path}`).join('\n')}`
+            : combinedText;
+
+        return { acpPrompt, cliPrompt };
+    }
+
+    async _cleanupUploadedAttachments(attachments) {
+        if (!Array.isArray(attachments) || attachments.length === 0) return;
+        const deletions = attachments
+            .filter((a) => a?.uploaded && typeof a?.path === 'string')
+            .map((a) => fsp.unlink(a.path).catch(() => { /* noop */ }));
+        await Promise.all(deletions);
+    }
+
+    _emitContextUsage(sessionId, s, context, source = 'acp') {
+        if (!context) return;
+        const payload = { ...context, source };
+        s.contextUsage = payload;
+        if (s.ws.readyState === 1) {
+            s.ws.send(JSON.stringify({
+                event: 'chat:meta',
+                data: { sessionId, context: payload },
+            }));
+        }
     }
 
     async _ensureAcpRuntime(sessionId, s) {
@@ -311,6 +549,12 @@ export class SessionManager {
                         event: 'chat:meta',
                         data: { sessionId, phase: 'ready' },
                     }));
+                    if (s.contextUsage) {
+                        s.ws.send(JSON.stringify({
+                            event: 'chat:meta',
+                            data: { sessionId, context: s.contextUsage },
+                        }));
+                    }
                 }
                 return runtime;
             })
@@ -380,6 +624,15 @@ export class SessionManager {
                 if ((update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
                     typeof runtime.onMeta === 'function') {
                     runtime.onMeta(update);
+                    return;
+                }
+
+                if (update.sessionUpdate === 'usage_update') {
+                    const context = formatContextUsage(update.used, update.size, 'acp');
+                    this._emitContextUsage(sessionId, s, context, 'acp');
+                    if (typeof runtime.onMeta === 'function') {
+                        runtime.onMeta(update);
+                    }
                 }
             },
             writeTextFile: async () => ({}),
@@ -518,21 +771,26 @@ export class SessionManager {
         }
     }
 
-    async _runChatAcpPrompt(sessionId, s, prompt, { allowModelFallback }) {
+    async _runChatAcpPrompt(sessionId, s, prompt, { allowModelFallback, attachments = [], promptBundle = null } = {}) {
         if (this.sessions.get(sessionId) !== s) return;
 
-        const promptText = String(prompt || '');
+        const bundle = promptBundle || await this._buildPromptBundle(prompt, attachments, s.cwd);
+        const cliPromptText = String(bundle?.cliPrompt || '');
+        const acpPrompt = Array.isArray(bundle?.acpPrompt) && bundle.acpPrompt.length > 0
+            ? bundle.acpPrompt
+            : [{ type: 'text', text: cliPromptText }];
+
         let runtime = null;
         try {
             runtime = await this._ensureAcpRuntime(sessionId, s);
-        } catch (err) {
+        } catch {
             // ACP unavailable: fallback to one-shot mode for this prompt.
-            this._runChatProcess(sessionId, s, promptText, { modelOverride: s.model, allowModelFallback });
+            await this._runChatProcess(sessionId, s, cliPromptText, { modelOverride: s.model, allowModelFallback });
             return;
         }
 
         if (!runtime?.connection || !runtime.sessionId) {
-            this._runChatProcess(sessionId, s, promptText, { modelOverride: s.model, allowModelFallback });
+            await this._runChatProcess(sessionId, s, cliPromptText, { modelOverride: s.model, allowModelFallback });
             return;
         }
 
@@ -567,7 +825,7 @@ export class SessionManager {
         try {
             const result = await runtime.connection.prompt({
                 sessionId: runtime.sessionId,
-                prompt: [{ type: 'text', text: promptText }],
+                prompt: acpPrompt,
             });
 
             clearTimeout(flushTimer);
@@ -599,7 +857,11 @@ export class SessionManager {
                 }
                 s.model = null;
                 await this._restartAcpRuntime(sessionId, s).catch(() => { /* fallback below */ });
-                return this._runChatAcpPrompt(sessionId, s, promptText, { allowModelFallback: false });
+                return this._runChatAcpPrompt(sessionId, s, prompt, {
+                    allowModelFallback: false,
+                    attachments,
+                    promptBundle: bundle,
+                });
             }
 
             if (s.ws.readyState === 1) {
@@ -621,142 +883,161 @@ export class SessionManager {
     }
 
     _runChatProcess(sessionId, s, prompt, { modelOverride, allowModelFallback }) {
-        if (this.sessions.get(sessionId) !== s) return;
+        if (this.sessions.get(sessionId) !== s) return Promise.resolve();
 
-        // Headless chat request via stream-json for faster incremental output.
-        const args = ['-o', 'stream-json'];
-        if (modelOverride) args.push('-m', modelOverride);
-        if (s.yolo) args.push('--yolo');
-        args.push('-p', prompt || '');
+        return new Promise((resolve) => {
+            // Headless chat request via stream-json for faster incremental output.
+            const args = ['-o', 'stream-json'];
+            if (modelOverride) args.push('-m', modelOverride);
+            if (s.yolo) args.push('--yolo');
+            args.push('-p', prompt || '');
 
-        const { command, spawnArgs, options } = buildGeminiSpawn(args, s.cwd);
-        const proc = spawn(command, spawnArgs, {
-            ...options,
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
+            const { command, spawnArgs, options } = buildGeminiSpawn(args, s.cwd);
+            const proc = spawn(command, spawnArgs, {
+                ...options,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
 
-        s.proc = proc;
-        let buffer = '';
-        let flushTimer = null;
-        let stderrBuffer = '';
-        let stdoutRaw = '';
-        let stdoutLineBuffer = '';
-        let sawJsonStream = false;
+            s.proc = proc;
+            let resolved = false;
+            const done = () => {
+                if (resolved) return;
+                resolved = true;
+                resolve();
+            };
 
-        const flushBuffer = () => {
-            if (buffer.length > 0 && s.ws.readyState === 1) {
-                s.ws.send(JSON.stringify({ event: 'chat:chunk', data: { sessionId, text: buffer } }));
-                buffer = '';
-            }
-        };
+            let buffer = '';
+            let flushTimer = null;
+            let stderrBuffer = '';
+            let stdoutRaw = '';
+            let stdoutLineBuffer = '';
+            let sawJsonStream = false;
 
-        const queueChunk = (text) => {
-            if (!text) return;
-            buffer += text;
-            if (!flushTimer) {
-                flushTimer = setTimeout(() => { flushTimer = null; flushBuffer(); }, 20);
-            }
-        };
-
-        const handleJsonLine = (line) => {
-            let msg;
-            try {
-                msg = JSON.parse(line);
-            } catch {
-                return false;
-            }
-
-            sawJsonStream = true;
-
-            if (msg?.type === 'message' && msg?.role === 'assistant' && typeof msg?.content === 'string') {
-                if (msg.delta) {
-                    queueChunk(msg.content);
-                } else {
-                    queueChunk(msg.content);
+            const flushBuffer = () => {
+                if (buffer.length > 0 && s.ws.readyState === 1) {
+                    s.ws.send(JSON.stringify({ event: 'chat:chunk', data: { sessionId, text: buffer } }));
+                    buffer = '';
                 }
+            };
+
+            const queueChunk = (text) => {
+                if (!text) return;
+                buffer += text;
+                if (!flushTimer) {
+                    flushTimer = setTimeout(() => { flushTimer = null; flushBuffer(); }, 20);
+                }
+            };
+
+            const handleJsonLine = (line) => {
+                let msg;
+                try {
+                    msg = JSON.parse(line);
+                } catch {
+                    return false;
+                }
+
+                sawJsonStream = true;
+
+                if (msg?.type === 'message' && msg?.role === 'assistant' && typeof msg?.content === 'string') {
+                    if (msg.delta) {
+                        queueChunk(msg.content);
+                    } else {
+                        queueChunk(msg.content);
+                    }
+                    return true;
+                }
+
+                if (msg?.type === 'result' && s.ws.readyState === 1 && msg?.stats) {
+                    const context = extractContextUsageFromStats(msg.stats, 'stream-json');
+                    if (context) this._emitContextUsage(sessionId, s, context, 'stream-json');
+                    s.ws.send(JSON.stringify({
+                        event: 'chat:meta',
+                        data: { sessionId, stats: msg.stats },
+                    }));
+                    return true;
+                }
+
                 return true;
-            }
+            };
 
-            if (msg?.type === 'result' && s.ws.readyState === 1 && msg?.stats) {
-                s.ws.send(JSON.stringify({
-                    event: 'chat:meta',
-                    data: { sessionId, stats: msg.stats },
-                }));
-                return true;
-            }
+            proc.stdout.on('data', (chunk) => {
+                const text = chunk.toString();
+                stdoutRaw += text;
+                stdoutLineBuffer += text;
 
-            return true;
-        };
+                let newlineIndex;
+                while ((newlineIndex = stdoutLineBuffer.indexOf('\n')) !== -1) {
+                    const line = stdoutLineBuffer.slice(0, newlineIndex).trim();
+                    stdoutLineBuffer = stdoutLineBuffer.slice(newlineIndex + 1);
+                    if (!line) continue;
+                    const handledAsJson = handleJsonLine(line);
+                    if (!handledAsJson) queueChunk(line + '\n');
+                }
+            });
 
-        proc.stdout.on('data', (chunk) => {
-            const text = chunk.toString();
-            stdoutRaw += text;
-            stdoutLineBuffer += text;
+            proc.stderr.on('data', (chunk) => {
+                const text = chunk.toString();
+                // Filter out common info/noise from stderr
+                if (text.includes('Loaded cached credentials') ||
+                    text.includes('DeprecationWarning') ||
+                    text.includes('ExperimentalWarning')) return;
+                stderrBuffer += text;
+            });
 
-            let newlineIndex;
-            while ((newlineIndex = stdoutLineBuffer.indexOf('\n')) !== -1) {
-                const line = stdoutLineBuffer.slice(0, newlineIndex).trim();
-                stdoutLineBuffer = stdoutLineBuffer.slice(newlineIndex + 1);
-                if (!line) continue;
-                const handledAsJson = handleJsonLine(line);
-                if (!handledAsJson) queueChunk(line + '\n');
-            }
-        });
+            proc.on('close', (code) => {
+                clearTimeout(flushTimer);
+                if (stdoutLineBuffer.trim().length > 0 && !sawJsonStream) {
+                    queueChunk(stdoutLineBuffer);
+                }
+                flushBuffer();
+                if (this.sessions.get(sessionId) !== s) {
+                    s.proc = null;
+                    done();
+                    return;
+                }
 
-        proc.stderr.on('data', (chunk) => {
-            const text = chunk.toString();
-            // Filter out common info/noise from stderr
-            if (text.includes('Loaded cached credentials') ||
-                text.includes('DeprecationWarning') ||
-                text.includes('ExperimentalWarning')) return;
-            stderrBuffer += text;
-        });
+                const combinedErrorText = `${stderrBuffer}\n${stdoutRaw}`;
+                const modelNotFound = /ModelNotFoundError|Requested entity was not found/i.test(combinedErrorText);
 
-        proc.on('close', (code) => {
-            clearTimeout(flushTimer);
-            if (stdoutLineBuffer.trim().length > 0 && !sawJsonStream) {
-                queueChunk(stdoutLineBuffer);
-            }
-            flushBuffer();
-            if (this.sessions.get(sessionId) !== s) return;
-            const combinedErrorText = `${stderrBuffer}\n${stdoutRaw}`;
-            const modelNotFound = /ModelNotFoundError|Requested entity was not found/i.test(combinedErrorText);
+                if (code !== 0 && allowModelFallback && modelOverride && modelNotFound) {
+                    if (s.ws.readyState === 1) {
+                        s.ws.send(JSON.stringify({
+                            event: 'chat:error',
+                            data: {
+                                sessionId,
+                                text: `Model "${modelOverride}" is unavailable for this Gemini account. Retrying with CLI default model...`,
+                            },
+                        }));
+                    }
+                    s.proc = null;
+                    this._runChatProcess(sessionId, s, prompt, { modelOverride: null, allowModelFallback: false })
+                        .finally(done);
+                    return;
+                }
 
-            if (code !== 0 && allowModelFallback && modelOverride && modelNotFound) {
-                if (s.ws.readyState === 1) {
+                if (code !== 0 && s.ws.readyState === 1) {
                     s.ws.send(JSON.stringify({
                         event: 'chat:error',
-                        data: {
-                            sessionId,
-                            text: `Model "${modelOverride}" is unavailable for this Gemini account. Retrying with CLI default model...`,
-                        },
+                        data: { sessionId, text: this._summarizeChatError(combinedErrorText, code) },
                     }));
                 }
+
+                if (s.ws.readyState === 1) {
+                    s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code } }));
+                }
                 s.proc = null;
-                this._runChatProcess(sessionId, s, prompt, { modelOverride: null, allowModelFallback: false });
-                return;
-            }
+                done();
+            });
 
-            if (code !== 0 && s.ws.readyState === 1) {
-                s.ws.send(JSON.stringify({
-                    event: 'chat:error',
-                    data: { sessionId, text: this._summarizeChatError(combinedErrorText, code) },
-                }));
-            }
-
-            if (s.ws.readyState === 1) {
-                s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code } }));
-            }
-            s.proc = null;
-        });
-
-        proc.on('error', (err) => {
-            console.error('[Chat] Process error:', err.message);
-            if (s.ws.readyState === 1) {
-                s.ws.send(JSON.stringify({ event: 'chat:error', data: { sessionId, text: 'Failed to run gemini: ' + err.message } }));
-                s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code: -1 } }));
-            }
-            s.proc = null;
+            proc.on('error', (err) => {
+                console.error('[Chat] Process error:', err.message);
+                if (s.ws.readyState === 1) {
+                    s.ws.send(JSON.stringify({ event: 'chat:error', data: { sessionId, text: 'Failed to run gemini: ' + err.message } }));
+                    s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code: -1 } }));
+                }
+                s.proc = null;
+                done();
+            });
         });
     }
 

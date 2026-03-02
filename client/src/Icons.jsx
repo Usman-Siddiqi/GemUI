@@ -54,6 +54,11 @@ export const Icons = {
             <polygon points="22 2 15 22 11 13 2 9 22 2" />
         </svg>
     ),
+    Paperclip: (props) => (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+            <path d="M21.44 11.05 12.25 20.24a5 5 0 1 1-7.07-7.07l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a2 2 0 1 1-2.83-2.83l8.49-8.48" />
+        </svg>
+    ),
     ChevronRight: (props) => (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
             <polyline points="9 18 15 12 9 6" />
@@ -112,6 +117,14 @@ export const Icons = {
             <circle cx="12" cy="12" r="10" />
             <line x1="2" y1="12" x2="22" y2="12" />
             <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+        </svg>
+    ),
+    GitBranch: (props) => (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+            <line x1="6" y1="3" x2="6" y2="15" />
+            <circle cx="6" cy="18" r="3" />
+            <circle cx="18" cy="6" r="3" />
+            <path d="M18 9a9 9 0 0 1-9 9" />
         </svg>
     ),
 };

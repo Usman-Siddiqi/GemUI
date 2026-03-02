@@ -2,13 +2,17 @@ import { Router } from 'express';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
+import os from 'os';
 import multer from 'multer';
 import { validatePath, isBlockedFile, isBinaryFile, MAX_FILE_SIZE, getDefaultWorkspace } from '../lib/workspace.js';
 
 export const fileApi = Router();
 
 // Multer for image uploads → temp directory
-const upload = multer({ dest: path.join(process.env.TEMP || '/tmp', 'gemui-uploads'), limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({
+    dest: path.join(process.env.TEMP || os.tmpdir() || '/tmp', 'gemui-uploads'),
+    limits: { fileSize: 8 * 1024 * 1024 },
+});
 
 // Helper: get workspace root from query or default
 function ws(req) {

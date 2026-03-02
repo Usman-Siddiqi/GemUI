@@ -15,6 +15,8 @@ export default function SettingsPanel({
     setModel,
     yolo,
     setYolo,
+    notificationSound,
+    setNotificationSound,
     health,
     modelCatalog,
     refreshingModels,
@@ -158,6 +160,15 @@ export default function SettingsPanel({
                             </div>
                         </div>
                         <div className={`toggle ${yolo ? 'active' : ''}`} onClick={() => setYolo(!yolo)} />
+                    </div>
+                    <div className="setting-row">
+                        <div>
+                            <div className="setting-label">Notification Sound</div>
+                            <div className="setting-description">
+                                Play a short sound when a Gemini response finishes while this tab is in the background.
+                            </div>
+                        </div>
+                        <div className={`toggle ${notificationSound ? 'active' : ''}`} onClick={() => setNotificationSound(!notificationSound)} />
                     </div>
                 </div>
 

@@ -3,9 +3,15 @@
 GemUI is a local web UI for the Gemini CLI.  
 It gives you a Gemini-web-style interface while keeping CLI power features like workspace file access, terminal control, sessions, and memory editing.
 
+## Screenshot
+
+![GemUI Screenshot](docs/images/gemui-screenshot.png)
+
 ## Features
 
-- Chat UI powered by headless Gemini CLI calls
+- Chat UI backed by a persistent Gemini CLI ACP session
+- Chat attachments (files + images)
+- Live context usage in chat (used / remaining / percent)
 - Integrated terminal panel
 - Workspace file explorer + editor (Monaco)
 - Code/text search (`grep`) and file glob search
@@ -63,9 +69,11 @@ scripts/  # Local dev helper scripts
 
 ## Notes on Runtime Behavior
 
-- Chat mode runs a new non-interactive Gemini process per message.
+- Chat runs on a persistent ACP runtime for lower latency.
+- If ACP is unavailable, GemUI falls back to one-shot `stream-json` calls automatically.
 - If a selected model is unavailable (`ModelNotFoundError`), GemUI retries with CLI default model automatically.
 - On some Windows/Node combinations where `node-pty` is unstable, terminal falls back to a safe pipe mode to keep the app usable.
+- Attachment limits: max 8 attachments per prompt, max 8 MB each.
 
 ## Troubleshooting
 
@@ -97,4 +105,3 @@ npm run dev
 
 - File APIs are constrained to the selected workspace root.
 - Blocked files (like `.env`) are protected by server-side checks.
-

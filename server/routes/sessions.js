@@ -192,6 +192,23 @@ sessionsApi.get('/sessions/:projectHash/:filename', async (req, res) => {
     }
 });
 
+// ── Delete a session file ────────────────────────────────────
+
+sessionsApi.delete('/sessions/:projectHash/:filename', async (req, res) => {
+    const { projectHash, filename } = req.params;
+    if (projectHash.includes('..') || filename.includes('..') || !filename.endsWith('.json')) {
+        return res.status(403).json({ error: 'Invalid path' });
+    }
+
+    const sessionPath = path.join(tmpDir, projectHash, 'chats', filename);
+    try {
+        await fs.unlink(sessionPath);
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(404).json({ error: 'Session not found' });
+    }
+});
+
 // ── Read GEMINI.md memory ─────────────────────────────────────
 
 sessionsApi.get('/memory', async (_req, res) => {

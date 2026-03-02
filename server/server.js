@@ -8,6 +8,7 @@ import { searchApi } from './routes/search.js';
 import { sessionsApi } from './routes/sessions.js';
 import { healthApi } from './routes/health.js';
 import { modelsApi } from './routes/models.js';
+import { gitApi } from './routes/git.js';
 import { SessionManager } from './lib/sessionManager.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,6 +31,7 @@ app.use('/api', healthApi);
 app.use('/api', modelsApi);
 app.use('/api', fileApi);
 app.use('/api', searchApi);
+app.use('/api', gitApi);
 app.use('/api', sessionsApi);
 
 // SPA fallback
@@ -129,7 +131,9 @@ wss.on('connection', (ws) => {
         }
         case 'chat:send': {
           if (!chatSessionId) return;
-          sessionManager.sendChatMessage(chatSessionId, data?.prompt ?? '');
+          sessionManager.sendChatMessage(chatSessionId, data?.prompt ?? '', {
+            attachments: data?.attachments,
+          });
           break;
         }
         case 'chat:update': {
