@@ -26,7 +26,7 @@ export default function App() {
     const [editingWorkspace, setEditingWorkspace] = useState(false);
     const [workspaceInput, setWorkspaceInput] = useState('');
     const [health, setHealth] = useState(null);
-    const [model, setModel] = useState('gemini-2.5-flash');
+    const [model, setModel] = useState('');
     const [yolo, setYolo] = useState(false);
     const ws = useWebSocket();
 
@@ -46,6 +46,8 @@ export default function App() {
         }
         setEditingWorkspace(false);
     };
+
+    const modelLabel = model || 'CLI default';
 
     const renderPanel = () => {
         switch (activePanel) {
@@ -157,7 +159,7 @@ export default function App() {
                     <div className="header-right">
                         <div className="header-model">
                             <Icons.Gemini style={{ width: 12, height: 12 }} />
-                            <span>{model}</span>
+                            <span>{modelLabel}</span>
                         </div>
                         <div className={`connection-dot ${ws.connected ? '' : 'disconnected'}`} title={ws.connected ? 'Connected' : 'Disconnected'} />
                     </div>

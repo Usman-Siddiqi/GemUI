@@ -15,6 +15,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
     const sessionStartedRef = useRef(false);
     const activeSessionRef = useRef(null);
     const pendingPromptRef = useRef(null);
+    const modelLabel = model || 'CLI default';
 
     // Start a chat session (this just registers the session, no process spawned yet)
     const startSession = useCallback(() => {
@@ -58,7 +59,8 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
         // Errors from stderr
         offs.push(ws.on('chat:error', (data) => {
             if (data?.sessionId && activeSessionRef.current && data.sessionId !== activeSessionRef.current) return;
-            const text = data.text || data.message || 'Unknown error';
+            const raw = data.text ?? data.message ?? 'Unknown error';
+            const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
             setMessages(prev => [...prev, { role: 'system', content: '⚠️ ' + text.trim(), time: new Date() }]);
         }));
 
@@ -181,7 +183,7 @@ export default function ChatPanel({ ws, workspace, model, yolo }) {
                             For interactive Gemini CLI with full TUI, use the <strong>Terminal</strong> panel.
                         </p>
                         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
-                            Supports <code>@file</code> references • Model: {model}
+                            Supports <code>@file</code> references • Model: {modelLabel}
                         </p>
                         {error && (
                             <div className="badge badge-error" style={{ marginTop: 'var(--space-3)', padding: '8px 16px' }}>

@@ -2,6 +2,7 @@ import React from 'react';
 import { Icons } from '../Icons';
 
 const MODELS = [
+    { value: '', label: 'CLI Default (Recommended)', tier: 'Recommended' },
     { value: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro (Preview)', tier: 'Latest' },
     { value: 'gemini-3.1-flash-preview', label: 'Gemini 3.1 Flash (Preview)', tier: 'Latest' },
     { value: 'gemini-3.0-pro', label: 'Gemini 3 Pro', tier: 'Current' },
@@ -86,7 +87,7 @@ export default function SettingsPanel({ model, setModel, yolo, setYolo, health }
                         </select>
                     </div>
                     <div className="setting-description" style={{ marginTop: 'var(--space-2)', color: 'var(--text-tertiary)' }}>
-                        You can also use <code>/model set &lt;name&gt;</code> in the chat or terminal to change models mid-session.
+                        Model availability depends on your Gemini account/project. Use CLI Default for maximum compatibility.
                     </div>
                 </div>
 

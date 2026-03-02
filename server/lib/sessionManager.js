@@ -79,8 +79,7 @@ export class SessionManager {
     }
 
     // ── Chat Mode: headless gemini per message ──────────────────────
-    // Prompt is piped via stdin to avoid Windows shell escaping issues.
-    // shell:true is needed for .cmd files on Windows.
+    // Prompt is piped via stdin to avoid shell escaping issues.
 
     createChatSession(cwd, ws, { model, yolo } = {}) {
         const id = randomUUID();
@@ -104,10 +103,16 @@ export class SessionManager {
             try { s.proc.kill('SIGTERM'); } catch { /* ok */ }
         }
 
+        this._runChatProcess(sessionId, s, prompt, { modelOverride: s.model, allowModelFallback: true });
+    }
+
+    _runChatProcess(sessionId, s, prompt, { modelOverride, allowModelFallback }) {
+        if (this.sessions.get(sessionId) !== s) return;
+
         // Build args — NO user content in args to avoid shell escaping issues.
         // Prompt is piped via stdin below.
         const args = ['-o', 'text'];
-        if (s.model) args.push('-m', s.model);
+        if (modelOverride) args.push('-m', modelOverride);
         if (s.yolo) args.push('--yolo');
 
         const command = process.platform === 'win32' ? 'cmd.exe' : 'gemini';
@@ -131,6 +136,7 @@ export class SessionManager {
         s.proc = proc;
         let buffer = '';
         let flushTimer = null;
+        let stderrBuffer = '';
 
         const flushBuffer = () => {
             if (buffer.length > 0 && s.ws.readyState === 1) {
@@ -152,14 +158,37 @@ export class SessionManager {
             if (text.includes('Loaded cached credentials') ||
                 text.includes('DeprecationWarning') ||
                 text.includes('ExperimentalWarning')) return;
-            if (s.ws.readyState === 1) {
-                s.ws.send(JSON.stringify({ event: 'chat:error', data: { sessionId, text } }));
-            }
+            stderrBuffer += text;
         });
 
         proc.on('close', (code) => {
             clearTimeout(flushTimer);
             flushBuffer();
+            if (this.sessions.get(sessionId) !== s) return;
+            const modelNotFound = /ModelNotFoundError|Requested entity was not found/i.test(stderrBuffer);
+
+            if (code !== 0 && allowModelFallback && modelOverride && modelNotFound) {
+                if (s.ws.readyState === 1) {
+                    s.ws.send(JSON.stringify({
+                        event: 'chat:error',
+                        data: {
+                            sessionId,
+                            text: `Model "${modelOverride}" is unavailable for this Gemini account. Retrying with CLI default model...`,
+                        },
+                    }));
+                }
+                s.proc = null;
+                this._runChatProcess(sessionId, s, prompt, { modelOverride: null, allowModelFallback: false });
+                return;
+            }
+
+            if (code !== 0 && s.ws.readyState === 1) {
+                s.ws.send(JSON.stringify({
+                    event: 'chat:error',
+                    data: { sessionId, text: this._summarizeChatError(stderrBuffer, code) },
+                }));
+            }
+
             if (s.ws.readyState === 1) {
                 s.ws.send(JSON.stringify({ event: 'chat:done', data: { sessionId, code } }));
             }
@@ -274,5 +303,19 @@ export class SessionManager {
         const session = { id, mode: 'terminal-pipe', cwd, proc, ws, startTime: Date.now(), lastActivity: Date.now() };
         this.sessions.set(id, session);
         return session;
+    }
+
+    _summarizeChatError(stderrText, code) {
+        const text = (stderrText || '').trim();
+        if (!text) return code ? `Gemini exited with code ${code}.` : 'Gemini request failed.';
+        if (/ModelNotFoundError|Requested entity was not found/i.test(text)) {
+            return 'Selected model is not available for this Gemini account/project.';
+        }
+
+        const line = text
+            .split(/\r?\n/)
+            .map(s => s.trim())
+            .find(s => s && !s.startsWith('at ') && !s.includes('file:///'));
+        return line || `Gemini request failed (code ${code}).`;
     }
 }
