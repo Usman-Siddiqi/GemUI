@@ -48,6 +48,7 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
     const [uploadingAttachments, setUploadingAttachments] = useState(false);
     const [pendingAttachments, setPendingAttachments] = useState([]);
     const [contextUsage, setContextUsage] = useState(null);
+    const [contextUnavailable, setContextUnavailable] = useState(false);
     const [error, setError] = useState(null);
     const messagesEnd = useRef(null);
     const textareaRef = useRef(null);
@@ -58,6 +59,7 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
     const pendingPayloadRef = useRef(null);
     const lastSessionConfigRef = useRef(null);
     const handledResumeNonceRef = useRef(null);
+    const hasContextUpdateRef = useRef(false);
     const modelLabel = model || 'CLI default';
 
     const mapHistoryMessages = useCallback((history) => {
@@ -119,6 +121,8 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
             setSessionId(data.sessionId);
             setRuntimeReady(false);
             setContextUsage(null);
+            setContextUnavailable(false);
+            hasContextUpdateRef.current = false;
             setError(null);
 
             if (pendingPayloadRef.current) {
@@ -158,7 +162,11 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
             if (data?.phase === 'warming') setRuntimeReady(false);
 
             const nextContext = normalizeContextPayload(data?.context);
-            if (nextContext) setContextUsage(nextContext);
+            if (nextContext) {
+                hasContextUpdateRef.current = true;
+                setContextUnavailable(false);
+                setContextUsage(nextContext);
+            }
         }));
 
         offs.push(ws.on('error', (data) => {
@@ -170,6 +178,9 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
             setLoading(false);
             setUploadingAttachments(false);
             const hadAssistantReply = currentChunkRef.current.trim().length > 0;
+            if (hadAssistantReply && !hasContextUpdateRef.current) {
+                setContextUnavailable(true);
+            }
             setMessages((prev) => {
                 const last = prev[prev.length - 1];
                 if (last?.streaming) {
@@ -221,6 +232,8 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
         setSessionId(null);
         setRuntimeReady(false);
         setContextUsage(null);
+        setContextUnavailable(false);
+        hasContextUpdateRef.current = false;
         activeSessionRef.current = null;
         pendingPayloadRef.current = null;
         sessionStartedRef.current = false;
@@ -378,6 +391,8 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
         setSessionId(null);
         setRuntimeReady(false);
         setContextUsage(null);
+        setContextUnavailable(false);
+        hasContextUpdateRef.current = false;
         activeSessionRef.current = null;
         pendingPayloadRef.current = null;
         sessionStartedRef.current = false;
@@ -410,6 +425,14 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
                             </div>
                             <span className="chat-context-tokens">{formatTokenCount(contextUsage.used)} / {formatTokenCount(contextUsage.size)}</span>
                             <span className="chat-context-remaining">{formatTokenCount(contextUsage.remaining)} left</span>
+                        </div>
+                    )}
+                    {!contextUsage && contextUnavailable && (
+                        <div
+                            className="chat-context-unavailable"
+                            title="Context usage is not currently emitted by this Gemini ACP runtime. In the Terminal panel, use /settings and disable 'Hide Context Window Percentage' to view it in CLI footer."
+                        >
+                            Context usage unavailable (ACP)
                         </div>
                     )}
                     <select
@@ -452,6 +475,11 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
                         <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
                             Supports attachments, <code>@file</code> references, and context usage tracking.
                             Model: {modelLabel}
+                        </p>
+                        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-1)' }}>
+                            If context usage is missing, open the Terminal panel and run <code>/settings</code> then disable
+                            {' '}
+                            <strong>Hide Context Window Percentage</strong>.
                         </p>
                         {error && (
                             <div className="badge badge-error" style={{ marginTop: 'var(--space-3)', padding: '8px 16px' }}>

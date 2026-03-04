@@ -11,7 +11,7 @@ It gives you a Gemini-web-style interface while keeping CLI power features like 
 
 - Chat UI backed by a persistent Gemini CLI ACP session
 - Chat attachments (files + images)
-- Live context usage in chat (used / remaining / percent)
+- Live context usage in chat when Gemini runtime emits usage telemetry (with an explicit ACP-unavailable indicator when not emitted)
 - Integrated terminal panel
 - Workspace file explorer + editor (Monaco)
 - Code/text search (`grep`) and file glob search
@@ -90,6 +90,20 @@ npm run dev
 
 Use **Settings -> Active Model -> CLI Default (Recommended)**.  
 Model availability depends on your Gemini account/project.
+
+### Context usage meter is missing in Chat
+
+GemUI Chat uses Gemini CLI ACP mode. In some Gemini CLI builds, ACP does not emit `usage_update`, so no context meter is available for Chat.
+
+To ensure context is visible in the CLI footer:
+
+1. Open the **Terminal** panel.
+2. Run `/settings`.
+3. Disable **Hide Context Window Percentage** (and keep **Hide Model Info** off).
+
+Docs:
+- Gemini CLI settings reference: https://geminicli.com/docs/reference/settings
+- ACP usage updates are still unstable/draft: https://agentclientprotocol.com/protocol/specification-2026-01-14/draft/schema/UsageUpdate
 
 ### App shows disconnected websocket
 
