@@ -1108,6 +1108,12 @@ export class SessionManager {
         return 'cold';
     }
 
+    getChatContextUsage(sessionId) {
+        const s = this.sessions.get(sessionId);
+        if (!s || s.mode !== 'chat') return null;
+        return s.contextUsage || null;
+    }
+
     _updateActivity(sessionId) {
         const s = this.sessions.get(sessionId);
         if (s) s.lastActivity = Date.now();

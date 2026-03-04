@@ -226,7 +226,10 @@ export default function App() {
             <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
                 <div className="sidebar-brand">
                     <Icons.Gemini />
-                    <h1>GemUI</h1>
+                    <div className="sidebar-brand-meta">
+                        <h1>GemUI</h1>
+                        <span>Local Gemini Workbench</span>
+                    </div>
                 </div>
 
                 <nav className="sidebar-nav">
@@ -298,7 +301,7 @@ export default function App() {
                         </button>
                         <style>{`@media (max-width: 768px) { #menu-toggle { display: flex !important; } }`}</style>
                         {activePanel !== 'welcome' && (
-                            <span style={{ fontWeight: 600, fontSize: 'var(--text-lg)' }}>
+                            <span className="header-title">
                                 {NAV_ITEMS.find(n => n.id === activePanel)?.label || 'GemUI'}
                             </span>
                         )}

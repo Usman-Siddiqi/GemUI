@@ -90,18 +90,46 @@ wss.on('connection', (ws) => {
 
         // ── Chat mode: persistent Gemini ACP session ───────────────────
         case 'chat:start': {
-          if (chatSessionId) {
-            sessionManager.destroySession(chatSessionId);
-          }
           const cwd = data?.cwd || process.env.USERPROFILE || process.env.HOME || '.';
           const model = data?.model;
           const yolo = data?.yolo ?? false;
+          const existingRuntimeState = chatSessionId ? sessionManager.getChatRuntimeState(chatSessionId) : null;
+
+          if (chatSessionId && existingRuntimeState) {
+            sessionManager.updateChatSession(chatSessionId, { cwd, model, yolo });
+            const runtimeState = sessionManager.getChatRuntimeState(chatSessionId);
+            ws.send(JSON.stringify({
+              event: 'chat:started',
+              data: { sessionId: chatSessionId, reused: true, runtimeState },
+            }));
+            if (runtimeState === 'ready') {
+              ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: chatSessionId, phase: 'ready' } }));
+              const context = sessionManager.getChatContextUsage(chatSessionId);
+              if (context) {
+                ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: chatSessionId, context } }));
+              }
+            } else if (runtimeState === 'warming') {
+              ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: chatSessionId, phase: 'warming' } }));
+            }
+            break;
+          }
+
+          if (chatSessionId) {
+            sessionManager.destroySession(chatSessionId);
+          }
           const s = sessionManager.createChatSession(cwd, ws, { model, yolo });
           chatSessionId = s.id;
-          ws.send(JSON.stringify({ event: 'chat:started', data: { sessionId: s.id } }));
           const runtimeState = sessionManager.getChatRuntimeState(s.id);
+          ws.send(JSON.stringify({
+            event: 'chat:started',
+            data: { sessionId: s.id, reused: false, runtimeState },
+          }));
           if (runtimeState === 'ready') {
             ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'ready' } }));
+            const context = sessionManager.getChatContextUsage(s.id);
+            if (context) {
+              ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, context } }));
+            }
           } else if (runtimeState === 'warming') {
             ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'warming' } }));
           }
@@ -117,13 +145,17 @@ wss.on('connection', (ws) => {
           const sourceSessionId = data?.sourceSessionId || data?.sessionId;
           const s = sessionManager.resumeChatSession(cwd, ws, { sessionId: sourceSessionId, model, yolo });
           chatSessionId = s.id;
+          const runtimeState = sessionManager.getChatRuntimeState(s.id);
           ws.send(JSON.stringify({
             event: 'chat:started',
-            data: { sessionId: s.id, resumedFrom: sourceSessionId || null },
+            data: { sessionId: s.id, resumedFrom: sourceSessionId || null, reused: false, runtimeState },
           }));
-          const runtimeState = sessionManager.getChatRuntimeState(s.id);
           if (runtimeState === 'ready') {
             ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'ready' } }));
+            const context = sessionManager.getChatContextUsage(s.id);
+            if (context) {
+              ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, context } }));
+            }
           } else if (runtimeState === 'warming') {
             ws.send(JSON.stringify({ event: 'chat:meta', data: { sessionId: s.id, phase: 'warming' } }));
           }

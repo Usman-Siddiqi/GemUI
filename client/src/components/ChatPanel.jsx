@@ -117,12 +117,20 @@ export default function ChatPanel({ ws, workspace, model, setModel, yolo, modelO
         const offs = [];
 
         offs.push(ws.on('chat:started', (data) => {
+            const nextSessionId = data?.sessionId || null;
+            const previousSessionId = activeSessionRef.current;
             activeSessionRef.current = data.sessionId;
             setSessionId(data.sessionId);
-            setRuntimeReady(false);
-            setContextUsage(null);
-            setContextUnavailable(false);
-            hasContextUpdateRef.current = false;
+            if (data?.runtimeState === 'ready') setRuntimeReady(true);
+            else if (data?.runtimeState === 'warming') setRuntimeReady(false);
+            else setRuntimeReady(false);
+
+            const reusedSameSession = !!data?.reused && previousSessionId && nextSessionId && previousSessionId === nextSessionId;
+            if (!reusedSameSession) {
+                setContextUsage(null);
+                setContextUnavailable(false);
+                hasContextUpdateRef.current = false;
+            }
             setError(null);
 
             if (pendingPayloadRef.current) {
